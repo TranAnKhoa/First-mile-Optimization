@@ -1,0 +1,10 @@
+{
+  "rseed": 1,
+  "instance_file": "K:/Data Science/SOS lab/Project Code/output_data/CEL_instance.pkl",
+  "iterations": 1000,
+  "instance_nr": 0,
+  "model_directory": "rl/trained_models/rl/cvrpAlnsEnv_LSA1/models/DR-ALNS_CVRP_100/"
+
+}
+
+
