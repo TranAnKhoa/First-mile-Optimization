@@ -29,8 +29,8 @@ except ImportError as e:
 # --- CẤU HÌNH ---
 base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 #INSTANCE_FILE = os.path.join(base_path, 'output_data', 'haiz.pkl')
-INSTANCE_FILE = os.path.join(base_path, 'Project Code', 'output_data', 'Small_sample.pkl')
-#INSTANCE_FILE = os.path.join(base_path, 'output_data', 'CEL_structured_instance.pkl')
+#INSTANCE_FILE = os.path.join(base_path, 'Project Code', 'output_data', 'Small_sample.pkl')
+INSTANCE_FILE = os.path.join(base_path, 'Project Code', 'output_data', 'CEL_instance.pkl')
 SEED, ITER = 1234, 100
 
 # CẤU HÌNH SIMULATED ANNEALING
@@ -187,35 +187,48 @@ print("\n--- BẮT ĐẦU VÒNG LẶP ALNS ---")
 temperature = start_temperature
 
 for i in range(ITER):
-    destroy_op = random_state.choice(destroy_operators)
-    repair_op = random_state.choice(repair_operators)
-    
-    # ## SIMPLIFICATION: unvisited bây giờ là danh sách các farm_id
-    destroyed, unvisited = destroy_op(current_solution, random_state)
-    
-    if not unvisited: continue
-    
-    # Lọc ra các ID 'TRANSFER_' nếu có (dù không nên có)
-    farms_to_reinsert = [c for c in unvisited if not str(c).startswith('TRANSFER_')]
-    if not farms_to_reinsert: continue
+    try: # <--- BỌC Ở ĐÂY
+        destroy_op = random_state.choice(destroy_operators)
+        repair_op = random_state.choice(repair_operators)
         
-    repaired, failed_to_insert = repair_op(destroyed, rand, unvisited_customers=farms_to_reinsert)
-    
-    if not failed_to_insert:
+        # In ra để biết toán tử nào đang chạy
+        print(f"\nIter {i}: Running {destroy_op.__name__}...")
         
-        refined_solution = apply_full_local_search(repaired)
+        destroyed, unvisited = destroy_op(current_solution, random_state)
+        
+        if not unvisited: continue
+        
+        farms_to_reinsert = [c for c in unvisited if not str(c).startswith('TRANSFER_')]
+        if not farms_to_reinsert: continue
+            
+        print(f"Iter {i}: Running {repair_op.__name__}...")
+        repaired, failed_to_insert = repair_op(destroyed, rand, unvisited_customers=farms_to_reinsert)
+        
+        if not failed_to_insert:
+        
+            refined_solution = apply_full_local_search(repaired)
 
-        current_obj = current_solution.objective()[0]
-        refined_obj = refined_solution.objective()[0]
+            current_obj = current_solution.objective()[0]
+            refined_obj = refined_solution.objective()[0]
 
-        if refined_obj < best_obj:
-            best_solution = refined_solution
-            best_obj = refined_obj
-            current_solution = refined_solution
-            print(f"Iter {i}: New best found! Obj = {best_obj:.2f}")
-        
-        elif random_state.random() < math.exp((current_obj - refined_obj) / temperature):
-             current_solution = refined_solution
+            if refined_obj < best_obj:
+                best_solution = refined_solution
+                best_obj = refined_obj
+                current_solution = refined_solution
+                print(f"Iter {i}: New best found! Obj = {best_obj:.2f}")
+            
+            elif random_state.random() < math.exp((current_obj - refined_obj) / temperature):
+                current_solution = refined_solution
+    except Exception as e:
+        print(f"\n❌❌❌ LỖI NGHIÊM TRỌNG Ở ITERATION {i} ❌❌❌")
+        print(f"Toán tử Destroy: {destroy_op.__name__}")
+        print(f"Toán tử Repair: {repair_op.__name__}")
+        print(f"Lỗi: {e}")
+        import traceback
+        traceback.print_exc() # In ra toàn bộ traceback
+        break # Dừng vòng lặp sau khi báo lỗi
+    
+    
 
     temperature = max(end_temperature, temperature * cooling_rate)
 

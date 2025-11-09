@@ -159,11 +159,7 @@ class cvrpEnv:
 
         for route_info in self.schedule:
             # support both 4-tuple (legacy) and 5-tuple (with start_time)
-            if len(route_info) == 5:
-                depot_idx, truck_id, customer_list, shift, start_time_at_depot = route_info
-            else:
-                depot_idx, truck_id, customer_list, shift = route_info
-                start_time_at_depot = 0
+            depot_idx, truck_id, customer_list, shift, start_time_at_depot = route_info
             
             unique_trucks_used.add(truck_id)
             truck_details = find_truck_by_id(truck_id, self.problem_instance['fleet']['available_trucks'])
@@ -205,8 +201,8 @@ class cvrpEnv:
             if truck_details:
                 lease_cost_per_day = truck_details.get('lease_cost_monthly', 0) / 30
                 total_fixed_cost += lease_cost_per_day # Chỉ tính cho 1 ngày
-
+    
         total_cost = total_variable_cost + total_fixed_cost + total_waiting_cost
-        
         # Vì lời giải cuối cùng phải khả thi, không có penalty
         return total_cost, 0
+    

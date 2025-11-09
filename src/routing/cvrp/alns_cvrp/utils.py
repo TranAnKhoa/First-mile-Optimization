@@ -56,7 +56,7 @@ def find_truck_by_id(truck_id, available_trucks):
 # ==============================================================================
 
 def _calculate_route_schedule_and_feasibility(depot_idx, customer_list, shift, start_time_at_depot, problem_instance, truck_info):
-    """
+    """ 
     ## FINAL VERSION ##
     Tính toán lịch trình, kiểm tra feasibility VÀ TỐI ƯU HÓA THỜI GIAN XUẤT PHÁT một cách chính xác.
     Trả về: (finish_time, is_feasible, total_dist, total_wait, optimal_start_time)
@@ -84,47 +84,11 @@ def _calculate_route_schedule_and_feasibility(depot_idx, customer_list, shift, s
         else:
             return base_idx, base_info['demand'], base_info['service_time_params'], base_info['time_windows']
 
-    # === BƯỚC 1: MÔ PHỎNG LẦN ĐẦU VỚI THỜI GIAN XUẤT PHÁT SỚM NHẤT ===
-    timeline_sim = []
-    current_time_sim1 = start_time_at_depot # Bắt đầu từ thời gian sớm nhất có thể
-
-    # Depot -> Farm 1
-    idx, demand, params, tw = _resolve_farm(customer_list[0])
-    travel_time = depot_farm_dist[depot_idx, idx] / velocity
-    arrival = current_time_sim1 + travel_time
-    start_tw, end_tw = tw[shift]
-    if arrival > end_tw: return -1, False, -1, -1, -1
-    service_start = max(arrival, start_tw)
-    service_duration = params[0] + (demand / params[1] if params[1] > 0 else 0)
-    current_time_sim1 = service_start + service_duration
-    timeline_sim.append({'arrival': arrival, 'start': service_start})
-
-    # Giữa các farm
-    for i in range(len(customer_list) - 1):
-        from_idx, _, _, _ = _resolve_farm(customer_list[i])
-        to_idx, to_demand, to_params, to_tw = _resolve_farm(customer_list[i+1])
-        travel_time = dist_matrix[from_idx, to_idx] / velocity
-        arrival = current_time_sim1 + travel_time
-        start_tw, end_tw = to_tw[shift]
-        if arrival > end_tw: return -1, False, -1, -1, -1
-        service_start = max(arrival, start_tw)
-        service_duration = to_params[0] + (to_demand / to_params[1] if to_params[1] > 0 else 0)
-        current_time_sim1 = service_start + service_duration
-        timeline_sim.append({'arrival': arrival, 'start': service_start})
     
-    # Quay về depot (để kiểm tra ràng buộc thời gian làm việc)
-    last_idx, _, _, _ = _resolve_farm(customer_list[-1])
-    travel_time_back = depot_farm_dist[depot_idx, last_idx] / velocity
-    finish_time_sim1 = current_time_sim1 + travel_time_back
-    if finish_time_sim1 > depot_end_time: return -1, False, -1, -1, -1
-
-    # === BƯỚC 2: TÍNH TOÁN THỜI GIAN XUẤT PHÁT TỐI ƯU ===
-    optimal_start_time = start_time_at_depot
-
     # === BƯỚC 3: MÔ PHỎNG LẠI VỚI THỜI GIAN TỐI ƯU ĐỂ LẤY KẾT QUẢ CUỐI CÙNG ===
     total_dist = 0
     total_wait = 0
-    current_time_final = optimal_start_time # Bắt đầu từ thời gian đã được tối ưu hóa
+    current_time_final = start_time_at_depot # Bắt đầu từ thời gian đã được tối ưu hóa
 
     # Lặp lại logic tính toán một cách cẩn thận để có được các giá trị cuối cùng
     idx, demand, params, tw = _resolve_farm(customer_list[0])
@@ -139,18 +103,19 @@ def _calculate_route_schedule_and_feasibility(depot_idx, customer_list, shift, s
         from_idx, _, _, _ = _resolve_farm(customer_list[i])
         to_idx, to_demand, to_params, to_tw = _resolve_farm(customer_list[i+1])
         travel_dist = dist_matrix[from_idx, to_idx]; total_dist += travel_dist
-        travel_time = travel_dist / velocity; arrival = current_time_final + travel_time
+        travel_time = travel_dist / velocity
+        arrival = current_time_final + travel_time
         start_tw, _ = to_tw[shift]; wait_time = max(0, start_tw - arrival); total_wait += wait_time
         service_start = arrival + wait_time
         service_duration = to_params[0] + (to_demand / to_params[1] if to_params[1] > 0 else 0)
         current_time_final = service_start + service_duration
-    
+
     last_idx, _, _, _ = _resolve_farm(customer_list[-1])
     travel_dist_back = depot_farm_dist[depot_idx, last_idx]; total_dist += travel_dist_back
     travel_time_back = travel_dist_back / velocity
     finish_time_final = current_time_final + travel_time_back
-        
-    return finish_time_final, True, total_dist, total_wait, optimal_start_time
+    
+    return finish_time_final, True, total_dist, total_wait, start_time_at_depot
 # ==============================================================================
 # HÀM KIỂM TRA TÍNH KHẢ THI (FEASIBILITY CHECKLIST)
 # ==============================================================================
@@ -311,12 +276,8 @@ def _remove_customers_from_schedule(schedule, customers_to_remove):
     Mỗi route_info bây giờ có 5 phần tử: (depot_idx, truck_id, customer_list, shift, start_time)
     """
     new_schedule = []
-    for idx, route_info in enumerate(schedule):
-        if len(route_info) != 5:
-            print(f"⚠️ Route {idx} có {len(route_info)} phần tử: {route_info}")
-    for route_info in schedule:
-        depot_idx, truck_id, customer_list, shift, start_time = route_info
-        
+    for route_info in schedule:#Duyệt qua từng phần tử trong array scheduling
+        depot_idx, truck_id, customer_list, shift, start_time = route_info    
         # Giữ lại các khách hàng không bị xóa
         updated_customer_list = [c for c in customer_list if c not in customers_to_remove]
         

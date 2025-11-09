@@ -31,17 +31,25 @@ def random_removal(current, random_state, **kwargs):
     
     # <<< SỬA LỖI Ở ĐÂY: GIẢI NÉN 5 PHẦN TỬ >>>
     # Lấy danh sách tất cả các visit có thể xóa
-    all_visits = [
-        fid for _, _, cust_list, shift, _ in destroyed.schedule 
-        for fid in cust_list if shift != 'INTER-FACTORY'
-    ]
+    all_visits = []  # 1. Tạo một danh sách rỗng
+    # 2. Vòng lặp ngoài: Lặp qua từng chuyến xe trong lịch trình
+    for route_info in destroyed.schedule:
+        # 3. Giải nén 5 phần tử của chuyến xe
+        _, _, cust_list, shift, _ = route_info
+        # 4. Điều kiện lọc: Chỉ xử lý nếu không phải là chuyến 'INTER-FACTORY'
+        if shift != 'INTER-FACTORY':
+            # 5. Vòng lặp trong: Lặp qua từng farm_id trong chuyến xe này
+            for fid in cust_list:
+                # 6. Thêm farm_id vào danh sách kết quả
+                all_visits.append(fid)
+    
 
     if not all_visits:
         return destroyed, []
     
-    num_to_remove = kwargs.get('num_to_remove', max(1, int(len(all_visits) * 0.15)))
+    num_to_remove = kwargs.get('num_to_remove', max(1, int(len(all_visits) * 0.15))) # Lấy ra 'num_to_move', nếu k có thì lấy phá 15%
     num_to_remove = min(num_to_remove, len(all_visits))
-
+    
     customers_to_remove = random.sample(all_visits, num_to_remove)
     
     destroyed.schedule = _remove_customers_from_schedule(destroyed.schedule, customers_to_remove)
@@ -60,14 +68,14 @@ def worst_removal(current, random_state, **kwargs):
     problem_instance = destroyed.problem_instance
 
     removed_customers = []
-    
+
     num_visits = sum(len(r[2]) for r in current.schedule if r[3] != 'INTER-FACTORY')
     if num_visits == 0:
         return destroyed, []
     default_frac = kwargs.get('remove_fraction', 0.20)
     num_to_remove = kwargs.get('num_to_remove', max(1, int(num_visits * default_frac)))
     num_to_remove = min(num_to_remove, num_visits)
-
+    
     power = kwargs.get('selection_power', 4)  # higher -> more bias to top items
 
     for _ in range(num_to_remove):
@@ -93,7 +101,7 @@ def worst_removal(current, random_state, **kwargs):
                 (truck_info['type'], truck_info['region']), 1.0
             )
             old_cost = old_dist * var_cost_per_km + old_wait * WAIT_COST_PER_MIN
-
+            
             for pos in range(len(customer_list)):
                 farm_to_remove = customer_list[pos]
                 temp_list = customer_list[:pos] + customer_list[pos+1:]
