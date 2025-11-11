@@ -118,15 +118,19 @@ def _get_shift_end_time(shift, problem_instance):
 
 def _calculate_route_schedule_and_feasibility(depot_idx, customer_list, shift, start_time_at_depot, problem_instance, truck_info):
     """ 
-    ## FINAL VERSION (Đã sửa) ##
-    Tính toán lịch trình, kiểm tra feasibility VÀ TỐI ƯU HÓA THỜI GIAN XUẤT PHÁT.
-    Trả về: (finish_time, is_feasible, total_dist, total_wait, optimal_start_time, time_penalty)
+    ## FINAL VERSION (Tối ưu 1 vòng lặp) ##
+    Tính toán LỊCH TRÌNH và TẢI TRỌNG chỉ trong MỘT vòng lặp.
+    
+    Trả về 7 giá trị, tách riêng (time_penalty) và (capacity_VIOLATION):
+    (finish_time, is_feasible, total_dist, total_wait, optimal_start_time, time_penalty, capacity_violation)
     """
+    
+    # === BƯỚC 0: ROUTE RỖNG ===
     if not customer_list:
-        # Thêm time_penalty = 0
-        return start_time_at_depot, True, 0, 0, start_time_at_depot, 0
+        # (finish, feasible, dist, wait, start, time_penalty, cap_violation)
+        return start_time_at_depot, True, 0, 0, start_time_at_depot, 0, 0
 
-    # --- Các biến và hàm con (không đổi) ---
+    # === BƯỚC 1: KHỞI TẠO BIẾN ===
     dist_matrix = problem_instance['distance_matrix_farms']
     depot_farm_dist = problem_instance['distance_depots_farms']
     farms = problem_instance['farms']
@@ -135,12 +139,13 @@ def _calculate_route_schedule_and_feasibility(depot_idx, customer_list, shift, s
     try:
         shift_end_time = problem_instance['shifts'][shift]['end']
     except (KeyError, TypeError):
-        shift_end_time = 1900 # Sử dụng giá trị fallback của bạn
-        
-    truck_name = truck_info['type']
-    velocity = 1.0 if truck_name in ["Single", "Truck and Dog"] else 0.5
+        shift_end_time = 1900 # Fallback của bạn
+            
+    truck_capacity = truck_info.get('capacity', float('inf')) 
+    velocity = 1.0 if truck_info['type'] in ["Single", "Truck and Dog"] else 0.5
     virtual_map = problem_instance.get('virtual_split_farms', {})
 
+    # (Hàm _resolve_farm không đổi)
     def _resolve_farm(fid):
         base_id_str = _clean_base_id(fid)
         try: base_idx = farm_id_to_idx[base_id_str]
@@ -151,57 +156,79 @@ def _calculate_route_schedule_and_feasibility(depot_idx, customer_list, shift, s
         else:
             return base_idx, base_info['demand'], base_info['service_time_params'], base_info['time_windows']
 
+            
+    # === BƯỚC 2: MÔ PHỎNG (TÍCH HỢP TÍNH TIME VÀ DEMAND) ===
     
-    # === BƯỚC 3: MÔ PHỎNG LẠI VỚI THỜI GIAN TỐI ƯU ĐỂ LẤY KẾT QUẢ CUỐI CÙNG ===
     total_dist = 0
     total_wait = 0
-    time_penalty = 0.0 # Khởi tạo biến phạt
+    time_penalty = 0.0
+    total_demand = 0.0     # <-- 1. Khởi tạo total_demand
     current_time_final = start_time_at_depot 
 
-    # Lặp lại logic tính toán
-    idx, demand, params, tw = _resolve_farm(customer_list[0])
-    travel_dist = depot_farm_dist[depot_idx, idx]; total_dist += travel_dist
-    travel_time = travel_dist / velocity; arrival = current_time_final + travel_time
-    start_tw, end_tw = tw[shift] # Lấy cả thời gian đóng cửa
-    wait_time = max(0, start_tw - arrival); total_wait += wait_time
-    service_start = arrival + wait_time
-    # *** THÊM TÍNH PENALTY ***
-    if service_start > end_tw + 1e-6: # Thêm epsilon cho sai số
-        time_penalty += (service_start - end_tw)
-    service_duration = params[0] + (demand / params[1] if params[1] > 0 else 0)
-    current_time_final = service_start + service_duration
-
-    for i in range(len(customer_list) - 1):
-        from_idx, _, _, _ = _resolve_farm(customer_list[i])
-        to_idx, to_demand, to_params, to_tw = _resolve_farm(customer_list[i+1])
-        travel_dist = dist_matrix[from_idx, to_idx]; total_dist += travel_dist
-        travel_time = travel_dist / velocity
-        arrival = current_time_final + travel_time
+    try:
+        # ---- Xử lý khách hàng đầu tiên (Depot -> C1) ----
+        idx, demand, params, tw = _resolve_farm(customer_list[0])
+        total_demand += demand # <-- 2. TÍNH DEMAND C1
         
-        start_tw, end_tw = to_tw[shift] # Lấy cả thời gian đóng cửa
-        
+        travel_dist = depot_farm_dist[depot_idx, idx]; total_dist += travel_dist
+        travel_time = travel_dist / velocity; arrival = current_time_final + travel_time
+        start_tw, end_tw = tw[shift] 
         wait_time = max(0, start_tw - arrival); total_wait += wait_time
         service_start = arrival + wait_time
         
-        # *** THÊM TÍNH PENALTY ***
-        if service_start > end_tw + 1e-6:
+        if service_start > end_tw + 1e-6: 
             time_penalty += (service_start - end_tw)
-        service_duration = to_params[0] + (to_demand / to_params[1] if to_params[1] > 0 else 0)
+        
+        service_duration = params[0] + (demand / params[1] if params[1] > 0 else 0)
         current_time_final = service_start + service_duration
 
-    last_idx, _, _, _ = _resolve_farm(customer_list[-1])
-    travel_dist_back = depot_farm_dist[depot_idx, last_idx]; total_dist += travel_dist_back
-    travel_time_back = travel_dist_back / velocity
-    finish_time_final = current_time_final + travel_time_back
-    
-    # *** THÊM TÍNH PENALTY (Về depot trễ) ***
-    if finish_time_final > shift_end_time + 1e-6:
-         time_penalty += (finish_time_final - shift_end_time)
-    # is_feasible BÂY GIỜ phụ thuộc vào time_penalty
-    is_feasible = True
+        # ---- Xử lý các khách hàng ở giữa (C(i) -> C(i+1)) ----
+        for i in range(len(customer_list) - 1):
+            from_idx, _, _, _ = _resolve_farm(customer_list[i])
+            to_idx, to_demand, to_params, to_tw = _resolve_farm(customer_list[i+1])
+            
+            total_demand += to_demand # <-- 3. TÍNH DEMAND C(i+1)
+            
+            travel_dist = dist_matrix[from_idx, to_idx]; total_dist += travel_dist
+            travel_time = travel_dist / velocity
+            arrival = current_time_final + travel_time
+            
+            start_tw, end_tw = to_tw[shift] 
+            wait_time = max(0, start_tw - arrival); total_wait += wait_time
+            service_start = arrival + wait_time
+            
+            if service_start > end_tw + 1e-6:
+                time_penalty += (service_start - end_tw)
+                
+            service_duration = to_params[0] + (to_demand / to_params[1] if to_params[1] > 0 else 0)
+            current_time_final = service_start + service_duration
 
-    # Trả về 6 giá trị
-    return finish_time_final, is_feasible, total_dist, total_wait, start_time_at_depot, time_penalty
+        # ---- Xử lý quay về Depot (CLast -> Depot) ----
+        last_idx, _, _, _ = _resolve_farm(customer_list[-1])
+        travel_dist_back = depot_farm_dist[depot_idx, last_idx]; total_dist += travel_dist_back
+        travel_time_back = travel_dist_back / velocity
+        finish_time_final = current_time_final + travel_time_back
+        
+        if finish_time_final > shift_end_time + 1e-6:
+             time_penalty += (finish_time_final - shift_end_time)
+    
+    except Exception as e:
+        # Bắt lỗi nếu _resolve_farm thất bại (ví dụ: farm_id không tồn tại)
+        print(f"LỖI NGHIÊM TRỌNG khi mô phỏng route: {e}. Trả về vi phạm lớn.")
+        # Trả về chi phí vô hạn để ALNS tự động hủy route này
+        return np.inf, True, np.inf, 0, start_time_at_depot, 9999999, 9999999
+        
+    # === BƯỚC 3: TÍNH TOÁN LƯỢNG VI PHẠM (VIOLATION) ===
+    
+    # Tính lượng vi phạm capacity (Đúng theo ý bạn, chỉ trả về lượng vi phạm)
+    capacity_violation = 0.0
+    if total_demand > truck_capacity:
+        capacity_violation = total_demand - truck_capacity 
+    
+    is_feasible = True # Luôn là True vì ta dùng soft constraints
+
+    # === BƯỚC 4: TRẢ VỀ 7 GIÁ TRỊ ===
+    return finish_time_final, is_feasible, total_dist, total_wait, start_time_at_depot, time_penalty, capacity_violation
 # ==============================================================================
 # HÀM Repair 
 # ==============================================================================
@@ -401,6 +428,7 @@ def _check_insertion_efficiency(problem_instance, route_info, insert_pos, farm_i
 
     WAIT_COST_PER_MIN = 0.2
     TIME_PENALTY_COST = 0.3
+    CAPACITY_PENALTY_COSt = 9999
     var_cost_per_km = problem_instance['costs']['variable_cost_per_km'].get(
         (truck_info['type'], truck_info['region']), 1.0
     )
@@ -423,24 +451,24 @@ def _check_insertion_efficiency(problem_instance, route_info, insert_pos, farm_i
     # --- Compute old route cost ---    
     old_total_cost = 0
     if customer_list:
-        _, is_feasible_old, old_dist, old_wait, _, time_penalty = _calculate_route_schedule_and_feasibility(
+        _, is_feasible_old, old_dist, old_wait, _, time_penalty, capacity_penalty = _calculate_route_schedule_and_feasibility(
             depot_idx, customer_list, shift_in_route, start_time, problem_instance, truck_info=truck_info
         )
         if not is_feasible_old:
             return False, float('inf'), -1
-        old_total_cost = old_dist * var_cost_per_km + old_wait * WAIT_COST_PER_MIN + time_penalty * TIME_PENALTY_COST
+        old_total_cost = old_dist * var_cost_per_km + old_wait * WAIT_COST_PER_MIN + time_penalty * TIME_PENALTY_COST + CAPACITY_PENALTY_COSt * capacity_penalty
 
     # --- Compute new route cost after inserting this farm ---
     test_route = customer_list[:insert_pos] + [farm_id_to_insert] + customer_list[insert_pos:]
     #Technique: Lấy mọi customer từ đầu tới vị trí insert_pos + chèn id farm mới vào + lấy phần còn lại
-    _, is_feasible_new, new_dist, new_wait, _, time_penalty_ = _calculate_route_schedule_and_feasibility(
+    _, is_feasible_new, new_dist, new_wait, _, time_penalty, capacity_penalty = _calculate_route_schedule_and_feasibility(
         depot_idx, test_route, shift_in_route, start_time, problem_instance, truck_info=truck_info
     )
 
     if not is_feasible_new:
         return False, float('inf'), -1
 
-    new_total_cost = new_dist * var_cost_per_km + new_wait * WAIT_COST_PER_MIN + time_penalty * TIME_PENALTY_COST
+    new_total_cost = new_dist * var_cost_per_km + new_wait * WAIT_COST_PER_MIN + time_penalty * TIME_PENALTY_COST + capacity_penalty * CAPACITY_PENALTY_COSt
     cost_increase = new_total_cost - old_total_cost
         
     return True, cost_increase, new_total_cost
@@ -490,7 +518,7 @@ def get_route_cost(problem_instance, route_info):
         (truck_info['type'], truck_info['region']), 1.0
     )
 
-    _, is_feasible, total_dist, total_wait, _, time_penalty = _calculate_route_schedule_and_feasibility(
+    _, is_feasible, total_dist, total_wait, _, time_penalty, capacity_penalty = _calculate_route_schedule_and_feasibility(
         depot_idx, customer_list, shift, 0, problem_instance, truck_info
     )
 
@@ -501,41 +529,61 @@ def get_route_cost(problem_instance, route_info):
 
 
 # ==============================================================================
-# HÀM IN ẤN CHO TEST ALNS
+
+
 # ==============================================================================
-def simulate_route_and_get_timeline(problem_instance, depot_idx, customer_list, shift, truck_info):
-    """Mô phỏng tuyến thực tế đúng với logic objective (không delay start)."""
+# HÀM SIMULATE (ĐÃ SỬA LỖI)
+# ==============================================================================
+def simulate_route_and_get_timeline(problem_instance, depot_idx, customer_list, shift, truck_info, passed_start_time): 
+    """Mô phỏng tuyến thực tế, BẮT ĐẦU TỪ THỜI GIAN ĐÃ TỐI ƯU (passed_start_time)."""
     if not customer_list:
         return 0, [], 0
 
-    # Giống hệt logic trong objective: start_time_at_depot = 0
-    start_time_at_depot = 0
-    finish_time, is_feasible, total_dist, total_wait, opt_start, time_penalty = _calculate_route_schedule_and_feasibility(
-        depot_idx, customer_list, shift, start_time_at_depot, problem_instance, truck_info
-    )
-    if not is_feasible:
-        return 0, [], 0
-
-    # Lấy thông tin để in (arrival, start, finish, wait) theo đúng dòng tính của hàm đó
+    # ### SỬA 1: SỬ DỤNG THỜI GIAN ĐÚNG (thay vì 0) ###
+    start_time_at_depot = passed_start_time 
+    
+    # Lấy thông tin
     dist_matrix = problem_instance['distance_matrix_farms']
     depot_farm_dist = problem_instance['distance_depots_farms']
+    farms = problem_instance['farms'] 
+    farm_id_to_idx = problem_instance['farm_id_to_idx_map'] 
+    virtual_map = problem_instance.get('virtual_split_farms', {}) 
     velocity = 1.0 if truck_info['type'] in ["Single", "Truck and Dog"] else 0.5
+    
+    # ### SỬA 2: SỬ DỤNG _resolve_farm (logic y hệt objective) ###
+    def _resolve_farm(fid):
+        base_id_str = _clean_base_id(fid) # Cần hàm _clean_base_id
+        try: base_idx = farm_id_to_idx[base_id_str]
+        except KeyError: base_idx = farm_id_to_idx[int(base_id_str)]
+        base_info = farms[base_idx]
+        
+        if isinstance(fid, str) and fid in virtual_map:
+            # Trả về (idx, details, portion_demand)
+            return base_idx, base_info, virtual_map[fid]['portion']
+        else:
+            # Trả về (idx, details, full_demand)
+            return base_idx, base_info, base_info['demand']
 
     timeline = []
-    current_time = start_time_at_depot
+    current_time = start_time_at_depot # <-- BẮT ĐẦU TỪ THỜI GIAN ĐÚNG
     prev_idx = -1
 
     for i, fid in enumerate(customer_list):
-        idx, details, demand = _get_farm_info(fid, problem_instance)
+        idx, details, demand = _resolve_farm(fid) # <-- SỬ DỤNG HÀM ĐÚNG
+        
         travel_dist = depot_farm_dist[depot_idx, idx] if i == 0 else dist_matrix[prev_idx, idx]
         travel_time = travel_dist / velocity
         arrival = current_time + travel_time
         start_tw, _ = details['time_windows'][shift]
-        wait = max(0, start_tw - arrival)
+        
+        # 'wait' SẼ ĐƯỢC TÍNH TOÁN DỰA TRÊN THỜI GIAN BẮT ĐẦU ĐÚNG
+        wait = max(0, start_tw - arrival) 
+        
         start_service = arrival + wait
         fix, var = details['service_time_params']
         service_duration = fix + (demand / var if var > 0 else 0)
         finish_service = start_service + service_duration
+        
         timeline.append({
             'fid': fid,
             'arrival': arrival,
@@ -543,7 +591,9 @@ def simulate_route_and_get_timeline(problem_instance, depot_idx, customer_list, 
             'start': start_service,
             'finish': finish_service
         })
-        current_time = finish_service
+        
+        # ### SỬA 3: CẬP NHẬT THỜI GIAN (thay vì reset) ###
+        current_time = finish_service 
         prev_idx = idx
 
     # Quay về depot
@@ -553,49 +603,48 @@ def simulate_route_and_get_timeline(problem_instance, depot_idx, customer_list, 
 
     return start_time_at_depot, timeline, return_depot_time
 
-# <<< HÀM fmt ĐÃ ĐƯỢC CẬP NHẬT ĐỂ LÀM TRÒN LÊN PHÚT >>>
+# ==============================================================================
+# HÀM FMT (Giữ nguyên)
+# ==============================================================================
 def fmt(minutes):
     """Định dạng phút (float) sang chuỗi HH:MM, làm tròn LÊN phút gần nhất."""
     if minutes is None or not isinstance(minutes, (int, float)):
         return "00:00"
-    
-    # Làm tròn TỔNG SỐ PHÚT lên số nguyên gần nhất
     total_rounded_minutes = math.ceil(minutes)
-    
-    # Tính toán giờ và phút từ tổng số phút đã làm tròn
     hours, mins = divmod(total_rounded_minutes, 60)
-    
-    # Định dạng chuỗi đầu ra
     return f"{int(hours):02d}:{int(mins):02d}"
 
-# <<< HÀM IN KHÔNG THAY ĐỔI CẤU TRÚC, CHỈ THAY ĐỔI CÁCH LÀM TRÒN >>>
+# ==============================================================================
+# HÀM IN (Sửa lại 2 chỗ)
+# ==============================================================================
 def print_schedule(sol):
     """
-    ## SIMPLIFIED & CORRECTED for 5-element tuple ##
-    In ra lịch trình tối ưu cho một ngày.
+    In ra lịch trình tối ưu, sử dụng optimal_start_time đã lưu.
     """
     prob = sol.problem_instance
     print("\n===== 🧭 LỊCH TRÌNH TỐI ƯU CHO NGÀY =====")
     
-    # <<< SỬA LỖI Ở ĐÂY: GIẢI NÉN 5 PHẦN TỬ >>>
-    # Thêm `_` để nhận giá trị start_time đã lưu nhưng không dùng đến ở đây.
-    for depot, truck_id, custs, shift, _ in sol.schedule:
+    # ### SỬA 4: Nhận "optimal_start_time" (từ schedule) ###
+    for depot, truck_id, custs, shift, optimal_start_time in sol.schedule:
         if not custs and shift != 'INTER-FACTORY': continue
 
         if shift == 'INTER-FACTORY':
             print(f"  🏭 Truck {truck_id} ({shift}): {str(custs[0]).replace('_', ' ')}")
             continue
 
+        # (Bạn phải đảm bảo hàm find_truck_by_id và _clean_base_id có thể được truy cập)
         truck_info = find_truck_by_id(truck_id, prob['fleet']['available_trucks'])
         if not truck_info: continue
 
-        # Gọi hàm mô phỏng để tính toán lại timeline chính xác nhất
-        optimal_start, timeline, return_depot_time = simulate_route_and_get_timeline(prob, depot, custs, shift, truck_info)
+        # ### SỬA 5: Gửi "optimal_start_time" vào hàm mô phỏng ###
+        calc_start, timeline, return_depot_time = simulate_route_and_get_timeline(
+            prob, depot, custs, shift, truck_info, optimal_start_time
+        )
         
         if not timeline: continue
 
-        print(f"  🚚 Truck {truck_id} ({shift}) - Depot {depot} (Xuất phát lúc {fmt(optimal_start)}):")
+        print(f"  🚚 Truck {truck_id} ({shift}) - Depot {depot} (Xuất phát lúc {fmt(calc_start)}):")
         for stop in timeline:
-            print(f"    🧭 Farm {stop['fid']}: Arrive {fmt(stop['arrival'])}, Wait {stop['wait']:.0f} min, "
+            # Bây giờ "stop['wait']" sẽ được tính toán chính xác
+            print(f"    🧭 Farm {stop['fid']}: Arrive {fmt(stop['arrival'])}, Wait {math.ceil(stop['wait'])} min, "
                   f"Start {fmt(stop['start'])}, Finish {fmt(stop['finish'])}")
-        
