@@ -22,7 +22,6 @@ def run_algo(folder, exp_name, client=None, **kwargs): #*kwargs -> dictionary of
     instance_file = str(base_path.joinpath(kwargs['instance_file']))
     model_path = base_path / kwargs['model_directory'] / 'model' #Tạo đường dẫn đến model đã train xong 
     
-    
     parameters = {'environment': {'iterations': iterations, 'instance_nr': [instance_nr], 'instance_file': instance_file}} #Tạo dictionary parameters để truyền vào môi trường
     env = cvrpAlnsEnv_LSA1(parameters) #Tạo môi trường rồi truyền parameters vào
     env.reset() #Reset môi trường, agent về lại trạng thái ban đầu   
@@ -65,7 +64,6 @@ def main(param_file=PARAMETERS_FILE):
     except Exception as e:
         print(f"Error in main: {e}")
         raise
-
 
 if __name__ == "__main__":
     main()

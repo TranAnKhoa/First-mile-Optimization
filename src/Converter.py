@@ -7,11 +7,8 @@ import math
 from collections import defaultdict
 
 # --- 1. CẤU HÌNH ---
-#EXCEL_FILE_PATH = r'E:\Syllabus for 2nd and 3rd year\cel\Project Code\output_data\Small_sample.xlsx'  # Đường dẫn tới file Excel đa sheet
-#EXCEL_FILE_PATH = r'E:\Syllabus for 2nd and 3rd year\cel\Project Code\output_data\CEL_instance.xlsx'  # Đường dẫn tới file Excel đa sheet
 EXCEL_FILE_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_instance.xlsx'
 # Tên file output thống nhất
-#PKL_OUTPUT_PATH = r'E:\Syllabus for 2nd and 3rd year\cel\Project Code\output_data\Small_structured_sample.pkl' 
 PKL_OUTPUT_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_instance.pkl'
 # Tên các sheet
 SHEET_FACILITY_MASTER = 'FacilityMaster'

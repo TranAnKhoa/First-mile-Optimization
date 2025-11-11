@@ -4,7 +4,8 @@ import numpy as np
 import re
 from collections import defaultdict
 import itertools
-from routing.cvrp.alns_cvrp.utils import _calculate_route_schedule_and_feasibility, _get_farm_info, find_truck_by_id, _check_insertion_feasibility
+import time
+from routing.cvrp.alns_cvrp.utils import _calculate_route_schedule_and_feasibility, _get_farm_info, find_truck_by_id, _check_insertion_efficiency, _check_insertion_delta, _calculate_route_schedule_WITH_SLACK, _check_accessibility
 # ==============================================================================
 # HÀM TIỆN ÍCH CHUNG (Không thay đổi)
 # ==============================================================================
@@ -16,26 +17,57 @@ from routing.cvrp.alns_cvrp.utils import _calculate_route_schedule_and_feasibili
 # ==============================================================================
 def _find_all_inserts_for_visit(schedule_list, visit_id, problem_instance):
     """
-    ## SIMPLIFIED ##
-    Tìm TẤT CẢ các vị trí chèn khả thi cho một farm_id và trả về danh sách đã sắp xếp.
+    ## PHIÊN BẢN TỐI ƯU HÓA - DEBUG ##
     """
     all_insertions = []
-
+    WAIT_COST_PER_MIN = 0.2 # (Nên lấy từ problem_instance)
+    
+    # In ra để xem hàm này có được gọi nhiều không
+    # print(f"  [_find_all] Bắt đầu tìm chỗ cho {visit_id}...")
+    
+    M = len(schedule_list)
+    
     # 1. Thử chèn vào các tuyến đường hiện có
     for route_idx, route_info in enumerate(schedule_list):
         if route_info[3] == 'INTER-FACTORY': continue
+            
+        # In định kỳ
+        # if (route_idx + 1) % 50 == 0:
+        #     print(f"    [_find_all] ...Đang check tuyến {route_idx + 1}/{M}...")
+
+        # (Code O(K) của bạn... _calculate_route_schedule_WITH_SLACK)
+        # ...
         
-        for insert_pos in range(len(route_info[2]) + 1):
-            is_feasible, cost_increase, _ = _check_insertion_feasibility(
-                problem_instance, route_info, insert_pos, visit_id, route_info[3], start_time=0
+        depot_idx, truck_id, customer_list, shift, start_time_at_depot = route_info
+        truck_info = find_truck_by_id(truck_id, problem_instance['fleet']['available_trucks'])
+        if not truck_info: continue
+        current_load = sum(_get_farm_info(fid, problem_instance)[2] for fid in customer_list)
+        is_feasible_orig, orig_dist, orig_wait, original_schedule = \
+            _calculate_route_schedule_WITH_SLACK(
+                depot_idx, customer_list, shift, start_time_at_depot, problem_instance, truck_info
+            )
+        if not is_feasible_orig:
+            continue
+            
+        # (Code O(K) * O(1) của bạn... _check_insertion_delta)
+        for insert_pos in range(len(original_schedule) - 1):
+            is_feasible, cost_increase = _check_insertion_delta(
+                problem_instance, route_info, original_schedule, 
+                insert_pos, visit_id, 
+                truck_info, current_load
             )
             if is_feasible:
                 all_insertions.append({
-                    'cost': cost_increase, 'route_idx': route_idx, 'pos': insert_pos,
-                    'shift': route_info[3], 'new_route_details': None
+                    'cost': cost_increase, 'route_idx': route_idx, 
+                    'pos': insert_pos, 'shift': shift, 'new_route_details': None
                 })
 
     # 2. Thử tạo một tuyến đường mới
+    # 🔴 NÚT THẮT CỔ CHAI RẤT NGHI NGỜ Ở ĐÂY 🔴
+    # print(f"  [_find_all] ...Đang check 'Tạo tuyến mới' cho {visit_id}...")
+    
+    # (Logic "Tạo tuyến mới" O(T*S*O(K)) của bạn)
+    # ... (sao chép y hệt logic cũ của bạn vào đây) ...
     farm_idx, farm_details, farm_demand = _get_farm_info(visit_id, problem_instance)
     facilities = problem_instance['facilities']
     closest_depot_idx = int(np.argmin(problem_instance['distance_depots_farms'][:, farm_idx]))
@@ -47,20 +79,17 @@ def _find_all_inserts_for_visit(schedule_list, visit_id, problem_instance):
         if truck.get('region') != depot_region or truck['capacity'] < farm_demand: continue
         truck_type_idx = type_to_idx.get(truck['type']);
         if truck_type_idx is None: continue
-        depot_access = facilities[closest_depot_idx].get('accessibility')
-        farm_access = farm_details.get('accessibility')
-        depot_ok = (depot_access is None or (len(depot_access) > truck_type_idx and depot_access[truck_type_idx] == 1))
-        farm_ok = (farm_access is None or (len(farm_access) > truck_type_idx and farm_access[truck_type_idx] == 1))
-        if depot_ok and farm_ok: suitable_trucks.append(truck)
+        depot_details = facilities[closest_depot_idx]
+        if _check_accessibility(truck, farm_details, depot_details):
+             suitable_trucks.append(truck)
 
     if suitable_trucks:
         best_truck_for_new_route = min(suitable_trucks, key=lambda t: t['capacity'])
-        WAIT_COST_PER_MIN = 0.2
         var_cost_per_km = problem_instance['costs']['variable_cost_per_km'].get(
             (best_truck_for_new_route['type'], best_truck_for_new_route['region']), 1.0)
         
         for shift in ['AM', 'PM']:
-            _, is_feasible, new_dist, new_wait, _ = _calculate_route_schedule_and_feasibility(
+            is_feasible, new_dist, new_wait, _ = _calculate_route_schedule_WITH_SLACK(
                 closest_depot_idx, [visit_id], shift, 0, problem_instance, best_truck_for_new_route)
             
             if is_feasible:
@@ -68,67 +97,164 @@ def _find_all_inserts_for_visit(schedule_list, visit_id, problem_instance):
                 all_insertions.append({
                     'cost': cost_of_new_route, 'route_idx': -1, 'pos': 0, 'shift': shift,
                     'new_route_details': (closest_depot_idx, best_truck_for_new_route['id'], shift, 0)
-
                 })
-            
+    
     all_insertions.sort(key=lambda x: x['cost'])
     return all_insertions
 
 # ==============================================================================
 # CÁC TOÁN TỬ SỬA CHỮA (VIẾT LẠI CHO SINGLE-DAY VRP)
 # ==============================================================================
+def best_insertion(current, random_state, **kwargs):
+    import copy
+import sys
+import time # Thêm time để đo
 
 def best_insertion(current, random_state, **kwargs):
     """
+    ## PHIÊN BẢN TỐI ƯU HÓA (O(N log N)) - DEBUG ##
+    """
+    print(f"[BestInsert] Bắt đầu. Tổng số khách cần chèn (N): {len(kwargs['unvisited_customers'])}")
+    start = time.time()
+    
+    repaired = copy.deepcopy(current)
+    problem_instance = repaired.problem_instance
+    unserved_customers_set = set(kwargs['unvisited_customers'])
+    failed_customers = []
+    
+    all_best_insertions = []
+    
+    # --- PHASE 1: TÍNH TOÁN CHI PHÍ (Chạy N lần) ---
+    print(f"[BestInsert] ... Bắt đầu Phase 1: Tính toán chi phí chèn (N={len(unserved_customers_set)})...")
+    
+    for idx, farm_id in enumerate(unserved_customers_set): 
+        
+        # In định kỳ để xem tiến độ
+        if (idx + 1) % 10 == 0:
+            print(f"[BestInsert] ... Phase 1: Đang tính toán cho khách {idx + 1}/{len(unserved_customers_set)} (ID: {farm_id})...")
+            
+        # 🔴 NÚT THẮT CỔ CHAI CÓ THỂ Ở ĐÂY 🔴
+        insertions = _find_all_inserts_for_visit(repaired.schedule, farm_id, problem_instance) 
+        
+        if not insertions:
+            continue
+            
+        best_insert_for_this_farm = insertions[0]
+        all_best_insertions.append(
+            (best_insert_for_this_farm['cost'], farm_id, best_insert_for_this_farm)
+        )
+
+    phase1_time = time.time()
+    print(f"[BestInsert] >>> Đã xong Phase 1 sau {phase1_time - start:.2f} giây.")
+
+    # --- PHASE 2: SẮP XẾP (Chạy 1 lần) ---
+    print(f"[BestInsert] ... Bắt đầu Phase 2: Sắp xếp {len(all_best_insertions)} lựa chọn...")
+    all_best_insertions.sort(key=lambda x: x[0])
+    phase2_time = time.time()
+    print(f"[BestInsert] >>> Đã xong Phase 2 sau {phase2_time - phase1_time:.2f} giây.")
+
+    # --- PHASE 3: THỰC HIỆN CHÈN (Chạy N lần) ---
+    print(f"[BestInsert] ... Bắt đầu Phase 3: Thực hiện chèn...")
+    
+    # (Code chèn của bạn y hệt như cũ)
+    for cost, farm_id, details in all_best_insertions:
+        if farm_id not in unserved_customers_set:
+            continue
+        
+        if details['route_idx'] == -1:
+            depot, truck_id, shift, start_time = details['new_route_details']
+            repaired.schedule.append((depot, truck_id, [farm_id], details['shift'], start_time))
+        else:
+            route_idx = details['route_idx']
+            pos = details['pos']
+            if route_idx >= len(repaired.schedule):
+                failed_customers.append(farm_id)
+                unserved_customers_set.remove(farm_id)
+                continue
+            route_as_list = list(repaired.schedule[route_idx])
+            if pos > len(route_as_list[2]):
+                pos = len(route_as_list[2])
+            route_as_list[2].insert(pos, farm_id)
+            repaired.schedule[route_idx] = tuple(route_as_list)
+        
+        unserved_customers_set.remove(farm_id)
+
+    # ... (Phần xử lý failed_customers) ...
+    failed_customers.extend(list(unserved_customers_set))
+    
+    end_time = time.time()
+    print(f"[BestInsert] >>> Hoàn thành. Tổng thời gian: {end_time - start:.2f} giây. Lỗi: {len(failed_customers)}")
+    
+    return repaired, failed_customers
+
+def regret_2_insertion(current, random_state, **kwargs):
+    """
     TIME-AWARE VERSION
-    Chèn lại các farm_id vào vị trí có chi phí thấp nhất, có xét đến start_time.
+    Chèn lại các farm_id có "regret" cao nhất (tức là nếu không chèn sớm thì sau này tốn nhiều chi phí hơn).
+    Có xét đến start_time của từng route.
     """
     repaired = copy.deepcopy(current)
     problem_instance = repaired.problem_instance
     unserved_customers = list(kwargs['unvisited_customers'])
     failed_customers = []
+    K = kwargs.get('k_regret', 2)  # Sử dụng K=3 mặc định
 
     while unserved_customers:
-        best_customer_to_insert = None
-        best_insertion_details = None
-        min_insertion_cost = float('inf')
+        customer_regret_options = []
 
-        # --- Xét tất cả farm để tìm vị trí chèn rẻ nhất ---
+        # --- 1) Tính regret cho mỗi farm ---
         for farm_id in unserved_customers:
             insertions = _find_all_inserts_for_visit(repaired.schedule, farm_id, problem_instance)
             if not insertions:
                 continue
-            best_insert_for_this_farm = insertions[0]
-            if best_insert_for_this_farm['cost'] < min_insertion_cost:
-                min_insertion_cost = best_insert_for_this_farm['cost']
-                best_customer_to_insert = farm_id
-                best_insertion_details = best_insert_for_this_farm
 
-        # --- Thực hiện chèn ---new_route_info
-        if best_customer_to_insert:
-            if best_insertion_details['route_idx'] == -1:
-                # 🔹 Tạo route mới
-                depot, truck_id, shift, start_time = best_insertion_details['new_route_details']
-                repaired.schedule.append((depot, truck_id, [best_customer_to_insert],
-                                          best_insertion_details['shift'], start_time))
-            else:
-                # 🔹 Chèn vào route có sẵn
-                route_idx = best_insertion_details['route_idx']
-                pos = best_insertion_details['pos']
-                route_as_list = list(repaired.schedule[route_idx])
-                route_as_list[2].insert(pos, best_customer_to_insert)
-                repaired.schedule[route_idx] = tuple(route_as_list)
-            
-            unserved_customers.remove(best_customer_to_insert)
-        else:
+            best_insert = insertions[0]
+            regret_value = 0
+
+            # Nếu có nhiều hơn 1 lựa chọn, tính regret giữa các lựa chọn đầu
+            if len(insertions) >= K:
+                for i in range(1, K):
+                    regret_value += (insertions[i]['cost'] - best_insert['cost'])
+            elif len(insertions) > 1:
+                for i in range(1, len(insertions)):
+                    regret_value += (insertions[i]['cost'] - best_insert['cost'])
+
+            customer_regret_options.append({
+                'regret': regret_value,
+                'customer': farm_id,
+                'best_insertion': best_insert
+            })
+
+        # --- 2) Nếu không còn farm khả thi ---
+        if not customer_regret_options:
             failed_customers = unserved_customers
-            print(f"!!! REPAIR FAILED: Không thể chèn các khách hàng: {failed_customers}")
+            print(f"!!! REPAIR FAILED: Không thể chèn các khách hàng còn lại: {failed_customers}")
             break
+
+        # --- 3) Chọn farm có regret cao nhất ---
+        best_regret_option = max(customer_regret_options, key=lambda x: x['regret'])
+        customer_to_insert = best_regret_option['customer']
+        insertion_details = best_regret_option['best_insertion']
+
+        # --- 4) Thực hiện chèn ---
+        if insertion_details['route_idx'] == -1:
+            # 🔹 Tạo route mới
+            depot, truck_id, shift, start_time = insertion_details['new_route_details']
+            repaired.schedule.append((depot, truck_id, [customer_to_insert],
+                                      insertion_details['shift'], start_time))
+        else:
+            # 🔹 Chèn vào route có sẵn
+            route_idx = insertion_details['route_idx']
+            pos = insertion_details['pos']
+            route_as_list = list(repaired.schedule[route_idx])
+            route_as_list[2].insert(pos, customer_to_insert)
+            repaired.schedule[route_idx] = tuple(route_as_list)
+
+        unserved_customers.remove(customer_to_insert)
 
     return repaired, failed_customers
 
-
-def regret_insertion(current, random_state, **kwargs):
+def regret_3_insertion(current, random_state, **kwargs):
     """
     TIME-AWARE VERSION
     Chèn lại các farm_id có "regret" cao nhất (tức là nếu không chèn sớm thì sau này tốn nhiều chi phí hơn).
@@ -195,13 +321,79 @@ def regret_insertion(current, random_state, **kwargs):
 
     return repaired, failed_customers
 
+def regret_4_insertion(current, random_state, **kwargs):
+    """
+    TIME-AWARE VERSION
+    Chèn lại các farm_id có "regret" cao nhất (tức là nếu không chèn sớm thì sau này tốn nhiều chi phí hơn).
+    Có xét đến start_time của từng route.
+    """
+    repaired = copy.deepcopy(current)
+    problem_instance = repaired.problem_instance
+    unserved_customers = list(kwargs['unvisited_customers'])
+    failed_customers = []
+    K = kwargs.get('k_regret', 4)  # Sử dụng K=3 mặc định
 
+    while unserved_customers:
+        customer_regret_options = []
+
+        # --- 1) Tính regret cho mỗi farm ---
+        for farm_id in unserved_customers:
+            insertions = _find_all_inserts_for_visit(repaired.schedule, farm_id, problem_instance)
+            if not insertions:
+                continue
+
+            best_insert = insertions[0]
+            regret_value = 0
+
+            # Nếu có nhiều hơn 1 lựa chọn, tính regret giữa các lựa chọn đầu
+            if len(insertions) >= K:
+                for i in range(1, K):
+                    regret_value += (insertions[i]['cost'] - best_insert['cost'])
+            elif len(insertions) > 1:
+                for i in range(1, len(insertions)):
+                    regret_value += (insertions[i]['cost'] - best_insert['cost'])
+
+            customer_regret_options.append({
+                'regret': regret_value,
+                'customer': farm_id,
+                'best_insertion': best_insert
+            })
+
+        # --- 2) Nếu không còn farm khả thi ---
+        if not customer_regret_options:
+            failed_customers = unserved_customers
+            print(f"!!! REPAIR FAILED: Không thể chèn các khách hàng còn lại: {failed_customers}")
+            break
+
+        # --- 3) Chọn farm có regret cao nhất ---
+        best_regret_option = max(customer_regret_options, key=lambda x: x['regret'])
+        customer_to_insert = best_regret_option['customer']
+        insertion_details = best_regret_option['best_insertion']
+
+        # --- 4) Thực hiện chèn ---
+        if insertion_details['route_idx'] == -1:
+            # 🔹 Tạo route mới
+            depot, truck_id, shift, start_time = insertion_details['new_route_details']
+            repaired.schedule.append((depot, truck_id, [customer_to_insert],
+                                      insertion_details['shift'], start_time))
+        else:
+            # 🔹 Chèn vào route có sẵn
+            route_idx = insertion_details['route_idx']
+            pos = insertion_details['pos']
+            route_as_list = list(repaired.schedule[route_idx])
+            route_as_list[2].insert(pos, customer_to_insert)
+            repaired.schedule[route_idx] = tuple(route_as_list)
+
+        unserved_customers.remove(customer_to_insert)
+
+    return repaired, failed_customers
 
 def time_shift_repair(current, random_state, **kwargs):
     # PARAMS — bạn có thể tinh chỉnh
     DEFAULT_START_SEARCH_MAX = 240   # tối đa dịch +240 phút (4 giờ) — tùy dữ liệu
     DEFAULT_START_SEARCH_STEP = 15   # bước 15 phút
-    WAIT_COST_PER_MIN = 0.2          
+    WAIT_COST_PER_MIN = 0.2
+    TIME_PENALTY = 0.3          
     """
     Repair operator that:
     1) performs an insertion repair (regret or best) to reinsert unvisited_customers
@@ -220,7 +412,7 @@ def time_shift_repair(current, random_state, **kwargs):
     repaired = copy.deepcopy(current)
     problem_instance = repaired.problem_instance
     unvisited = list(kwargs.get('unvisited_customers', []))
-    base_repair = kwargs.get('base_repair', regret_insertion)  # use your regret_insertion by default
+    base_repair = kwargs.get('base_repair', regret_2_insertion)  # use your regret_insertion by default
     start_search_max = kwargs.get('start_search_max', DEFAULT_START_SEARCH_MAX)
     start_search_step = kwargs.get('start_search_step', DEFAULT_START_SEARCH_STEP)
     optimize_by = kwargs.get('optimize_by', 'cost')  # or 'wait'
@@ -245,7 +437,7 @@ def time_shift_repair(current, random_state, **kwargs):
         # We'll support both formats: if route already has 5-tuple, keep its start as baseline
         if len(route) == 5:
             depot_idx, truck_id, cust_list, shift, existing_start = route
-            baseline_start = int(existing_start or 0)
+            baseline_start = int(existing_start)
         else:
             depot_idx, truck_id, cust_list, shift = route
             baseline_start = 0
@@ -267,7 +459,7 @@ def time_shift_repair(current, random_state, **kwargs):
         # candidate_start iterate from 0 up to start_search_max (inclusive)
         # optionally you could allow negative shifts (start earlier) if model supports it
         for s in range(0, start_search_max + 1, start_search_step):
-            finish_time, is_feasible, total_dist, total_wait, opt_start = _calculate_route_schedule_and_feasibility(
+            finish_time, is_feasible, total_dist, total_wait, opt_start, time_penalty = _calculate_route_schedule_and_feasibility(
                 depot_idx, cust_list, shift, s, problem_instance, truck_info
             )
             if not is_feasible:
@@ -280,7 +472,7 @@ def time_shift_repair(current, random_state, **kwargs):
                 var_cost_per_km = problem_instance['costs']['variable_cost_per_km'].get(
                     (truck_info['type'], truck_info['region']), 1.0
                 )
-                metric = total_dist * var_cost_per_km + total_wait * wait_cost_per_min
+                metric = total_dist * var_cost_per_km + total_wait * wait_cost_per_min + time_penalty*TIME_PENALTY
 
             if metric < best_metric - 1e-6:
                 best_metric = metric
@@ -294,10 +486,6 @@ def time_shift_repair(current, random_state, **kwargs):
 
     return repaired, failed_customers
 #! Mấy repairs dưới chưa đổi theo yếu tố multi-trip, cần sửa lại sau
-
-
-
-
 
 
 """

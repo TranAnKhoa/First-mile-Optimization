@@ -20,7 +20,7 @@ def _calculate_route_schedule_and_feasibility_ini(depot_idx, customer_list, shif
     depot_farm_dist = problem_instance['distance_depots_farms']  # ma trận khoảng cách depot -> farm (m x n)
     farms = problem_instance['farms']                            # danh sách dict mô tả từng farm
     farm_id_to_idx = problem_instance['farm_id_to_idx_map']      # map id -> index tương ứng trong 'farms'
-    depot_end_time = 1440  # phút trong ngày (24h * 60) — depot phải về trước thời điểm này
+    depot_end_time = 1900  # phút trong ngày (24h * 60) — depot phải về trước thời điểm này
     current_time = start_time_at_depot  # thời gian hiện tại (bắt đầu từ thời điểm xe rời depot)
     truck_name = truck_info['type']      # kiểu xe (ví dụ "Single", "20m", ...)
     # Thiết lập vận tốc tương đối theo kiểu xe — giả lập: "Single" & "Truck and Dog" nhanh (1.0), else 0.5
@@ -68,12 +68,12 @@ def _calculate_route_schedule_and_feasibility_ini(depot_idx, customer_list, shif
 
     # Lấy time window cho shift (shift là 'AM' hoặc 'PM') -> mỗi farm lưu time_windows theo key 'AM'/'PM'
     start_tw, end_tw = first_tw[shift]
+    service_start = max(arrival_time, start_tw)
     # Nếu đến sau end_tw (quá trễ) -> infeasible
-    if arrival_time > end_tw:
+    if service_start > end_tw + 1e-6:
         return -1, False
 
     # service_start = max(arrival_time, start_tw) -> nếu đến sớm thì chờ đến start_tw
-    service_start = max(arrival_time, start_tw)
     fix_time, var_param = first_params
     # service_duration = fix_time + demand / var_param (nếu var_param > 0)
     # lưu ý: var_param thường là tốc độ phục vụ (units per minute). Nếu var_param == 0 -> treat as fix only
@@ -92,10 +92,11 @@ def _calculate_route_schedule_and_feasibility_ini(depot_idx, customer_list, shif
         # lấy time window cho farm kế tiếp ở shift tương ứng
         start_tw, end_tw = to_tw[shift]
         # nếu đến sau end_tw -> không khả thi
-        if arrival_time > end_tw:
+        service_start = max(arrival_time, start_tw)
+        if service_start > end_tw:
             return -1, False
 
-        service_start = max(arrival_time, start_tw)
+        
         fix_time, var_param = to_params
         service_duration = fix_time + (to_demand / var_param if var_param > 0 else 0)
         current_time = service_start + service_duration
@@ -104,10 +105,10 @@ def _calculate_route_schedule_and_feasibility_ini(depot_idx, customer_list, shif
     last_idx, _, _, _ = _resolve_farm(customer_list[-1])
     travel_time_back = depot_farm_dist[depot_idx, last_idx] / velocity
     finish_time_at_depot = current_time + travel_time_back
-    # Nếu về depot sau thời gian depot_end_time (1440 phút) -> infeasible
+    # Nếu về depot sau thời gian depot_end_time (1900 phút) -> infeasible
     if finish_time_at_depot > depot_end_time:
         return -1, False
-
+    
     # Trả về thời gian finish và cờ feasible True
     return finish_time_at_depot, True
 
@@ -119,13 +120,11 @@ def compute_initial_solution(problem_instance, random_state):
     count = 0  # biến đếm số farm không xử lý được (error / infeasible)
     #set: kiểu dữ liệu có thể gồm nhiều type of data --> k có thứ tự, k bị trùng lặp --> như kiểu cái kho để chứa t.tin
     onfly_split_done = set()  # lưu những farm đã bị "on-the-fly split" để không split lại
-
     # Lấy các cấu trúc chính từ problem_instance --> tất cả biến đầu là dictionary
     farms = problem_instance['farms']                         # list of farm dicts
     facilities = problem_instance['facilities']               # list of depot/facility dicts
     available_trucks = problem_instance['fleet']['available_trucks']  # list của truck dicts
     farm_id_to_idx_map = problem_instance['farm_id_to_idx_map']       # map id -> index
-
     final_schedule = []  # danh sách kết quả tuyến (mỗi phần tử: (depot, truck, cust_list, shift, start_time))  # giới hạn tải trên 1 depot (đơn vị demand)
     depot_capacity=[]
     farm_demand =[] #dùng để tính median của demnad
@@ -323,8 +322,8 @@ def compute_initial_solution(problem_instance, random_state):
                 # Nếu không tìm được truck thỏa -> thử reuse (multi-trip) bằng cách kiểm tra truck_finish_times
                 if transfer_truck is None:
                     for truck_id, (finish_time, depot_used) in truck_finish_times.items():
-                        # Nếu truck đã quay về depot_used trong cùng region và có đủ thời gian (finish_time + 180 < 1440)
-                        if facilities[depot_used]['region'] == depot_region and finish_time + 180 < 1440:
+                        # Nếu truck đã quay về depot_used trong cùng region và có đủ thời gian (finish_time + 180 < 1900)
+                        if facilities[depot_used]['region'] == depot_region and finish_time + 180 < 1900:
                             # Lấy object truck từ available_trucks theo truck_id
                             transfer_truck = next((t for t in available_trucks if t['id'] == truck_id), None)
                             if transfer_truck:

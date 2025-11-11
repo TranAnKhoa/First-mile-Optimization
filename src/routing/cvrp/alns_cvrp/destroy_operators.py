@@ -17,6 +17,7 @@ import numpy as np
 
 # Tham số dùng chung (nếu bạn có config chung, bạn có thể chuyển xuống file config)
 WAIT_COST_PER_MIN = 0.2
+TIME_PENALTY = 0.3
 
 # Trong file destroy_operators.py
 
@@ -92,7 +93,7 @@ def worst_removal(current, random_state, **kwargs):
                 continue
 
             # Get old route metrics
-            _, feasible_old, old_dist, old_wait, _ = _calculate_route_schedule_and_feasibility(
+            _, feasible_old, old_dist, old_wait, _, time_penalty = _calculate_route_schedule_and_feasibility(
                 depot_idx, customer_list, shift, 0, problem_instance, truck_info
             )
             if not feasible_old:
@@ -100,7 +101,7 @@ def worst_removal(current, random_state, **kwargs):
             var_cost_per_km = problem_instance['costs']['variable_cost_per_km'].get(
                 (truck_info['type'], truck_info['region']), 1.0
             )
-            old_cost = old_dist * var_cost_per_km + old_wait * WAIT_COST_PER_MIN
+            old_cost = old_dist * var_cost_per_km + old_wait * WAIT_COST_PER_MIN + time_penalty*TIME_PENALTY
             
             for pos in range(len(customer_list)):
                 farm_to_remove = customer_list[pos]
@@ -109,13 +110,13 @@ def worst_removal(current, random_state, **kwargs):
                 if not temp_list:
                     new_cost = 0.0
                 else:
-                    _, feasible_new, new_dist, new_wait, _ = _calculate_route_schedule_and_feasibility(
+                    _, feasible_new, new_dist, new_wait, _, time_penalty = _calculate_route_schedule_and_feasibility(
                         depot_idx, temp_list, shift, 0, problem_instance, truck_info
                     )
                     if not feasible_new:
                         # If removing this farm causes infeasibility (shouldn't normally), penalize by skipping
                         continue
-                    new_cost = new_dist * var_cost_per_km + new_wait * WAIT_COST_PER_MIN
+                    new_cost = new_dist * var_cost_per_km + new_wait * WAIT_COST_PER_MIN + time_penalty*TIME_PENALTY
 
                 saving = old_cost - new_cost
                 # Keep also some context to break ties / debugging
@@ -168,7 +169,7 @@ def shaw_removal(current, random_state, **kwargs):
     """
     destroyed = copy.deepcopy(current)
     problem = destroyed.problem_instance
-    
+        
     # <<< SỬA LỖI Ở ĐÂY: GIẢI NÉN 5 PHẦN TỬ >>>
     # Bây giờ all_visits sẽ là danh sách các tuple: (farm_id, depot_idx, shift, start_time)
     all_visits = [
