@@ -61,8 +61,9 @@ class cvrpEnv:
         total_variable_cost = 0.0
         total_fixed_cost = 0.0
         total_waiting_cost = 0.0
-        total_penalty_cost = 0.0  # <<< THÊM MỚI: Biến lưu chi phí phạt >>>
-        
+        total_penalty_cost = 0.0  # <<< THÊM MỚI: Biến lưu chi phí phạt --> cho time >>>
+        total_capacity_penalty = 0.0
+        CAP_PENALTY_WEIGHT = 100000
         unique_trucks_used = set()
         dist_depot_depot = self.problem_instance.get('distance_matrix_depots', None)
 
@@ -94,19 +95,17 @@ class cvrpEnv:
             
             if not customer_list:
                 continue
-
+            
             # <<< THAY ĐỔI CỐT LÕI: SỬ DỤNG HÀM TÍNH TOÁN NÂNG CẤP >>>
             # Giả định: hàm _calculate... *luôn* trả về (total_dist, total_wait)
-            finish_time, is_feasible, total_dist, total_wait, start_time, route_penalty = _calculate_route_schedule_and_feasibility(
+            finish_time, is_feasible, total_dist, total_wait, start_time, route_penalty, capacity_penalty = _calculate_route_schedule_and_feasibility(
                 depot_idx, customer_list, shift, start_time_at_depot, self.problem_instance, truck_details)
-            print('route:', route_info)
-            print('late: ',route_penalty)
 
             # <<< THAY ĐỔI: BỎ TRẢ VỀ 'inf', THAY BẰNG CỘNG DỒN PENALTY >>>
             # if not is_feasible:
             #     # Trả về chi phí vô cùng lớn để loại bỏ lời giải này
             #     return float('inf'), float('inf')
-            
+            total_capacity_penalty += capacity_penalty
             # Thay vào đó, cộng dồn chi phí phạt (nếu có)
             total_penalty_cost += route_penalty*TIME_PENALTY 
 
@@ -123,7 +122,7 @@ class cvrpEnv:
                 total_fixed_cost += lease_cost_per_day # Chỉ tính cho 1 ngày
         
         # <<< THAY ĐỔI: Thêm chi phí phạt vào tổng chi phí >>>
-        total_cost = total_variable_cost + total_fixed_cost + total_waiting_cost + total_penalty_cost
+        total_cost = total_variable_cost + total_fixed_cost + total_waiting_cost + total_penalty_cost + total_capacity_penalty * CAP_PENALTY_WEIGHT
         
         # Trả về tổng chi phí (để ALNS tối ưu) và chi phí phạt (để theo dõi)
-        return total_cost, total_penalty_cost, total_waiting_cost
+        return total_cost, total_penalty_cost, total_waiting_cost, total_capacity_penalty

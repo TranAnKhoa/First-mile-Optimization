@@ -1,71 +1,116 @@
-import time
 import csv
 import sys
 import os
+from pathlib import Path
+
+# --- CẤU HÌNH ĐƯỜNG DẪN ---
+# Đảm bảo Python có thể tìm thấy các module của bạn
+# (Giữ nguyên cấu trúc của bạn)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from pathlib import Path
-from rl.environments.cvrp_AlnsEnv_LSA1_gpseq import cvrpAlnsEnv_LSA1
-import helper_functions
-
+# --- IMPORT CÁC THÀNH PHẦN CẦN THIẾT ---
+# Môi trường PPO mới mà chúng ta đã tạo
+from rl.environments.PPO_ALNS_Env_GP import PPO_ALNS_Env_GP 
+# Các hàm tiện ích của bạn
+import helper_functions 
+# Agent PPO từ Stable Baselines3
 from stable_baselines3 import PPO
+# Hàm đọc dữ liệu của bạn
+from routing.cvrp.alns_cvrp import cvrp_helper_functions
 
+
+# --- CÁC HẰNG SỐ ---
 DEFAULT_RESULTS_ROOT = "single_runs/"
-PARAMETERS_FILE = r'K:\Data Science\SOS lab\Project Code\code\src\routing\cvrp\configs\drl_alns_cvrp_debug.json'
+# Thay đổi đường dẫn này cho phù hợp với cấu trúc project của bạn
+PARAMETERS_FILE = r'K:\Data Science\SOS lab\Project Code\src\routing\cvrp\configs\drl_alns_cvrp_debug.json'
 
-def run_algo(folder, exp_name, client=None, **kwargs): #*kwargs -> dictionary of parameters được truyền qua json (gồm nhiều parameters như instance_nr,rseed, iterations,...)
-    instance_nr = kwargs['instance_nr'] #--> instance number: sử dụng instance nào trong file instance (ở đây là instance thứ 9999 trong 10000 instance)
-    seed = kwargs['rseed'] #giá trị khởi tạo, rseed=1 --> tất cả lần khởi tạo đều có giá trị giống nhau
-    iterations = kwargs['iterations'] #số vòng lặp của thuật toán ALNS (max iterations)
 
+def run_evaluation(folder, exp_name, problem_instance, **kwargs):
+    """
+    Hàm này thực hiện việc đánh giá một agent PPO đã huấn luyện trên một instance cụ thể.
+    Nó thay thế cho vòng lặp `env.run(model)` bằng vòng lặp chuẩn của Gym.
+    """
+    # 1. Trích xuất các tham số cần thiết
+    instance_nr = kwargs['instance_nr']
+    seed = kwargs['rseed']
+    iterations = kwargs['iterations']
+
+    # 2. Khởi tạo môi trường PPO_ALNS_Env
+    # Môi trường cần 'problem_instance' và 'max_iterations'
+    env = PPO_ALNS_Env_GP(problem_instance=problem_instance, max_iterations=iterations)
+
+    # 3. Tải model PPO đã được huấn luyện
     base_path = Path(__file__).parent.parent.parent
-    instance_file = str(base_path.joinpath(kwargs['instance_file']))
-    model_path = base_path / kwargs['model_directory'] / 'model' #Tạo đường dẫn đến model đã train xong 
+    model_path = base_path / kwargs['model_directory'] / 'model'
+    print(f"Đang tải model từ: {model_path}")
+    model = PPO.load(model_path)
     
-    parameters = {'environment': {'iterations': iterations, 'instance_nr': [instance_nr], 'instance_file': instance_file}} #Tạo dictionary parameters để truyền vào môi trường
-    env = cvrpAlnsEnv_LSA1(parameters) #Tạo môi trường rồi truyền parameters vào
-    env.reset() #Reset môi trường, agent về lại trạng thái ban đầu   
-    model = PPO("MlpPolicy", env, verbose=1)
-    model.learn(total_timesteps=100000)
-    #model = PPO.load(model_path)
-    start_time = time.time() 
-    
-    env.run(model)
-    
-    end_time = time.time()
-    elapsed = end_time - start_time
-    print(f"⏱️ Tổng thời gian chạy env.run: {elapsed:.2f} giây")
-    best_objective = env.best_solution.objective()
-    print("best_obj", best_objective)
-    
-    Path(folder).mkdir(parents=True, exist_ok=True)
-    with open(folder + exp_name + ".csv", "w") as f:
-        writer = csv.writer(f)
-        writer.writerow(['problem_instance', 'rseed', 'iterations', 'solution', 'best_objective', 'instance_file'])
-        writer.writerow([instance_nr, seed, iterations, env.best_solution.routes, best_objective, kwargs['instance_file']])
+    # --- 4. VÒNG LẶP ĐÁNH GIÁ (THAY THẾ CHO env.run(model)) ---
+    print("\n--- Bắt đầu vòng lặp đánh giá ---")
+    obs = env.reset()
+    for i in range(iterations):
+        # Agent chọn hành động tốt nhất dựa trên state hiện tại
+        # deterministic=True đảm bảo agent không khám phá ngẫu nhiên nữa
+        action, _states = model.predict(obs, deterministic=True)
+        
+        # Môi trường thực hiện hành động đó
+        obs, reward, done, info = env.step(action)
+        
+        # In ra tiến trình (tùy chọn)
+        env.render()
+        
+        # Nếu episode (ALNS run) kết thúc, dừng vòng lặp
+        if done:
+            break
+    print("--- Vòng lặp đánh giá kết thúc ---")
 
-    return [], best_objective
+    # 5. Lấy kết quả cuối cùng từ môi trường
+    # Các thuộc tính .best_solution và .best_objective được theo dõi bên trong môi trường
+    best_solution_routes = env.best_solution.schedule # <-- XÁC NHẬN TÊN THUỘC TÍNH NÀY
+    best_objective_value = env.best_objective
+    
+    print(f"\nKết quả tốt nhất đạt được: {best_objective_value}")
+    
+    # 6. Ghi kết quả ra file CSV (giữ nguyên logic của bạn)
+    Path(folder).mkdir(parents=True, exist_ok=True)
+    with open(folder + exp_name + ".csv", "w", newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['problem_instance', 'rseed', 'iterations', 'solution_schedule', 'best_objective', 'instance_file'])
+        writer.writerow([instance_nr, seed, iterations, best_solution_routes, best_objective_value, kwargs['instance_file']])
+
+    return best_objective_value
 
 
 def main(param_file=PARAMETERS_FILE):
     try:
-        print(f"Attempting to read file: {param_file}")
+        print(f"Đang đọc file tham số: {param_file}")
         parameters = helper_functions.readJSONFile(param_file)
-        print("Parameters loaded:", parameters)
+        print("Đã tải tham số:", parameters)
 
+        # --- TẢI DỮ LIỆU INSTANCE TRƯỚC KHI CHẠY ---
+        base_path = Path(__file__).parent.parent.parent
+        instance_file = str(base_path.joinpath(parameters['instance_file']))
+        
+        print(f"Đang đọc dữ liệu instance từ: {instance_file}")
+        # Sử dụng hàm đọc input của bạn để lấy ra đối tượng 'problem'
+        (_, _, _, _, _, _, _, _, problem_obj) = cvrp_helper_functions.read_input_cvrp(instance_file)
+        print("Đã đọc xong dữ liệu instance.")
+
+        # Thiết lập thư mục và tên file kết quả
         folder = DEFAULT_RESULTS_ROOT
-        print("Results folder:", folder)
+        exp_name = 'drl_alns_eval_' + str(parameters["instance_nr"]) + "_" + str(parameters["rseed"])
+        print("Tên file kết quả:", exp_name)
 
-        exp_name = 'drl_alns' + str(parameters["instance_nr"]) + "_" + str(parameters["rseed"])
-        print("Experiment name:", exp_name)
-
-        best_objective = run_algo(folder, exp_name, **parameters)
+        # Gọi hàm đánh giá và truyền vào 'problem_instance' đã được tải
+        best_objective = run_evaluation(folder, exp_name, problem_instance=problem_obj, **parameters)
         return best_objective
+
     except Exception as e:
-        print(f"Error in main: {e}")
+        print(f"Lỗi trong hàm main: {e}")
+        import traceback
+        traceback.print_exc()
         raise
+
 
 if __name__ == "__main__":
     main()
-    
-    
