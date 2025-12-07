@@ -1,0 +1,288 @@
+import os
+import sys
+import time
+import random
+import math
+import copy
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+from stable_baselines3 import PPO
+#! python run_benchmark.py
+# ==============================================================================
+# 1. SETUP ĐƯỜNG DẪN & IMPORT
+# ==============================================================================
+# Fix path tự động để chạy trên mọi máy
+current_dir = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = r'C:\AnKhoa\Project_Code'
+if PROJECT_ROOT not in sys.path: sys.path.insert(0, PROJECT_ROOT)
+
+from src.rl.environments.PPO_ALNS_Env_GP import PPO_ALNS_Env_GP
+from src.routing.cvrp.alns_cvrp import cvrp_helper_functions
+from src.routing.cvrp.alns_cvrp.cvrp_env import cvrpEnv
+from src.routing.cvrp.alns_cvrp.initial_solution import compute_initial_solution
+from src.routing.cvrp.alns_cvrp.utils import optimize_all_start_times, cleanup_inter_factory_routes, update_history_matrix
+# Import Operators
+from src.routing.cvrp.alns_cvrp.destroy_operators import (
+    random_removal, worst_removal_alpha_0, worst_removal_bigM, 
+    worst_removal_adaptive, time_worst_removal, shaw_spatial, 
+    shaw_hybrid, shaw_temporal, shaw_structural, trip_removal, 
+    historical_removal, update_solution_state_after_destroy
+
+)
+from src.routing.cvrp.alns_cvrp.repair_operators import (
+    best_insertion, regret_2_position, regret_2_trip, regret_2_vehicle, 
+    regret_3_position, regret_3_trip, regret_3_vehicle, 
+    regret_4_position, regret_4_trip, regret_4_vehicle
+)
+
+DESTROY_OPS = [random_removal, worst_removal_alpha_0, worst_removal_bigM, worst_removal_adaptive, time_worst_removal, shaw_spatial, shaw_hybrid, shaw_temporal, shaw_structural, trip_removal, historical_removal]
+REPAIR_OPS = [best_insertion, regret_2_position, regret_2_trip, regret_2_vehicle, regret_3_position, regret_3_trip, regret_3_vehicle, regret_4_position, regret_4_trip, regret_4_vehicle]
+
+def get_op_name(op):
+    if hasattr(op, '__name__'): return op.__name__
+    if hasattr(op, 'func'): return op.func.__name__
+    return str(op)
+
+# ==============================================================================
+# CẤU HÌNH BENCHMARK
+# ==============================================================================
+N_RUNS = 20           # Số lần chạy để lấy thống kê
+ITERATIONS = 2000     # Số bước mỗi lần chạy
+INSTANCE_FILE = os.path.join(PROJECT_ROOT, "output_data", "CEL_instance.pkl")
+# Đường dẫn model PPO (Cập nhật đúng đường dẫn file zip của bạn)
+# Sửa lại dòng này trong run_benchmark.py
+MODEL_PATH = r"C:\AnKhoa\Project_Code\Save_model\checkpoints_macro_22\ppo_macro_22_150000_steps.zip"
+
+print(f"📂 Loading Data: {INSTANCE_FILE}")
+(_, _, _, _, _, _, _, _, problem_obj) = cvrp_helper_functions.read_input_cvrp(INSTANCE_FILE)
+
+# ==============================================================================
+# HÀM CHẠY 1: PROPOSED METHOD (PPO + MACRO-OPS)
+# ==============================================================================
+def run_ppo_session(seed):
+    env = PPO_ALNS_Env_GP(problem_instance=problem_obj, max_iterations=ITERATIONS, buffer_size=1)
+    
+    # Check model
+    full_path = MODEL_PATH + ".zip" if not MODEL_PATH.endswith(".zip") else MODEL_PATH
+    if not os.path.exists(full_path):
+        print(f"⚠️ Model not found: {full_path}")
+        return 0, 0
+
+    model = PPO.load(MODEL_PATH)
+    obs, _ = env.reset(seed=seed)
+    
+    start_time = time.time()
+    done = False
+    
+    while not done:
+        action, _ = model.predict(obs, deterministic=False)
+        step_res = env.step(action)
+        if len(step_res) == 5: obs, reward, done, trunc, info = step_res
+        else: obs, reward, done, info = step_res
+            
+    return env.best_objective, time.time() - start_time
+
+# ==============================================================================
+# HÀM CHẠY 2: BASELINE (PURE ALNS - LOGIC CHUẨN CỦA BẠN)
+# ==============================================================================
+def run_atomic_alns_session(seed):
+    """
+    Logic ALNS chuẩn (Backup/Restore, History Update, SA Cooling)
+    y hệt như trong file test_alns.py bạn cung cấp.
+    """
+    random_state = np.random.RandomState(seed)
+    
+    # 1. Init
+    init_sched = compute_initial_solution(problem_obj, random_state)
+    current_solution = cvrpEnv(init_sched, problem_obj, seed=seed)
+    current_solution = cleanup_inter_factory_routes(current_solution)
+    
+    best_solution = copy.deepcopy(current_solution)
+    
+    # Init Stats
+    res = best_solution.objective()
+    best_obj = res[0]
+    initial_obj = best_obj
+    
+    global_history_matrix = {}
+    update_history_matrix(global_history_matrix, current_solution) 
+    
+    # Param ALNS
+    start_temperature = initial_obj * 0.05
+    end_temperature = 0.1
+    temperature = start_temperature
+    cooling_rate = 0.9995 
+    
+    MAX_REMOVE_FRACTION = 0.4
+    MIN_REMOVE_FRACTION = 0.1
+    
+    start_time = time.time()
+    
+    for i in range(ITERATIONS):
+        try:
+            # 1. CHỌN TOÁN TỬ
+            destroy_op = random_state.choice(DESTROY_OPS)
+            repair_op = random_state.choice(REPAIR_OPS)
+            
+            # 2. Adaptive Remove Fraction
+            progress = i / ITERATIONS
+            remove_fraction = MAX_REMOVE_FRACTION - (MAX_REMOVE_FRACTION - MIN_REMOVE_FRACTION) * progress
+            
+            op_kwargs = {
+                'remove_fraction': remove_fraction,
+                'history_matrix': global_history_matrix
+            }
+            
+            # 3. Destroy
+            temp_sol = copy.deepcopy(current_solution) # Tạo bản sao để phá
+            # Clean trước khi phá (để tránh lỗi data cũ nếu có)
+            temp_sol = cleanup_inter_factory_routes(temp_sol)
+
+            destroyed, unvisited = destroy_op(temp_sol, random_state, **op_kwargs)
+            destroyed = update_solution_state_after_destroy(destroyed)
+            
+            if not unvisited: continue 
+            
+            farms_to_reinsert = [c for c in unvisited if not str(c).startswith('TRANSFER_')]
+            if not farms_to_reinsert: continue
+            
+            # 4. Repair
+            repaired, failed_to_insert = repair_op(destroyed, random_state, unvisited_customers=farms_to_reinsert)
+            
+            if not failed_to_insert:
+                refined_solution = repaired
+                
+                # Tính objective
+                current_obj = current_solution.objective()[0]
+                refined_results = refined_solution.objective()
+                refined_obj = refined_results[0]
+                
+                # 5. Kiểm tra & Tối ưu (Logic của bạn)
+                if refined_obj < best_obj:
+                    # 1. Backup trước khi LS
+                    solution_backup = copy.deepcopy(refined_solution)
+                    
+                    try:
+                        # 2. Chạy Local Search (Optimize Time)
+                        # Hàm này phải là bản "Safe"
+                        refined_solution = optimize_all_start_times(refined_solution)
+                        
+                        # 3. Kiểm tra sau LS
+                        polished_res = refined_solution.objective()
+                        polished_obj = polished_res[0]
+                        
+                        if polished_obj < best_obj and polished_obj < 1e9:
+                            # THÀNH CÔNG: Cập nhật Best
+                            best_solution = refined_solution
+                            current_solution = refined_solution
+                            best_obj = polished_obj
+                            
+                            # Cập nhật History Matrix (Học từ Best mới)
+                            update_history_matrix(global_history_matrix, best_solution)
+                        
+                        else:
+                            # THẤT BẠI: Hoàn tác về bản trước LS
+                            refined_solution = solution_backup
+                            
+                            # Vẫn check xem bản Backup có tốt hơn Best cũ không
+                            if refined_obj < best_obj:
+                                best_solution = refined_solution
+                                current_solution = refined_solution
+                                best_obj = refined_obj
+                                update_history_matrix(global_history_matrix, best_solution)
+                                
+                    except Exception:
+                        # Lỗi trong LS -> Revert
+                        refined_solution = solution_backup
+                
+                # 6. LOGIC SA (Simulated Annealing)
+                elif random_state.random() < math.exp((current_obj - refined_obj) / max(temperature, 1e-6)):
+                    current_solution = refined_solution
+                    # Cập nhật History Matrix (Học từ giải pháp được chấp nhận bởi SA)
+                    update_history_matrix(global_history_matrix, current_solution)
+            
+            # 7. Giảm nhiệt độ
+            temperature = max(end_temperature, temperature * cooling_rate)
+            
+        except Exception:
+            pass # Bỏ qua lỗi iteration này
+            
+    return best_obj, time.time() - start_time
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+def main():
+    print(f"\n🚀 BẮT ĐẦU BENCHMARK (n={N_RUNS}, steps={ITERATIONS})")
+    print(f"   [1] Baseline: Pure ALNS (Standard Logic)")
+    print(f"   [2] Proposed: PPO + Macro-Ops")
+    print("-" * 60)
+
+    results = []
+    seeds = [1234]
+
+    for i, seed in enumerate(seeds):
+        print(f"\n🔹 Run {i+1}/{N_RUNS} (Seed: {seed})")
+        
+        # Baseline
+        print("   Running Baseline... ", end="\r")
+        base_cost, base_time = run_atomic_alns_session(int(seed))
+        print(f"   Using Baseline : Cost = {base_cost:.2f} ({base_time:.1f}s)")
+        
+        # PPO
+        print("   Running PPO...      ", end="\r")
+        ppo_cost, ppo_time = run_ppo_session(int(seed))
+        print(f"   Using PPO      : Cost = {ppo_cost:.2f} ({ppo_time:.1f}s)")
+        
+        gap = ((base_cost - ppo_cost) / base_cost) * 100
+        
+        results.append({
+            'Run': i+1,
+            'Seed': seed,
+            'Baseline': base_cost,
+            'Proposed': ppo_cost,
+            'Gap (%)': gap,
+            'Time_Base': base_time,
+            'Time_PPO': ppo_time
+        })
+
+    # Report
+    df = pd.DataFrame(results)
+    print("\n" + "="*70)
+    print("📊 KẾT QUẢ CHI TIẾT")
+    print("="*70)
+    print(df[['Run', 'Baseline', 'Proposed', 'Gap (%)']].to_string(index=False))
+    
+    t_stat, p_value = stats.ttest_rel(df['Baseline'], df['Proposed'])
+    
+    print("\n" + "="*70)
+    print("🏆 BÁO CÁO KHOA HỌC")
+    print("="*70)
+    print(f"{'Metric':<20} | {'Baseline':<15} | {'Proposed':<15}")
+    print("-" * 60)
+    print(f"{'Best (Min)':<20} | {df['Baseline'].min():<15.2f} | {df['Proposed'].min():<15.2f}")
+    print(f"{'Average':<20} | {df['Baseline'].mean():<15.2f} | {df['Proposed'].mean():<15.2f}")
+    print("-" * 60)
+    print(f"👉 Average Gap: {df['Gap (%)'].mean():.2f}%")
+    print(f"👉 p-value: {p_value:.5f}")
+    
+    if p_value < 0.05: print("✅ PPO tốt hơn có ý nghĩa thống kê.")
+    else: print("⚠️ Hai phương pháp tương đương.")
+
+    csv_path = os.path.join(PROJECT_ROOT, "benchmark_results.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"💾 Đã lưu dữ liệu thô (Sheet) tại: {csv_path}")
+    try:
+        plt.figure(figsize=(8, 6))
+        sns.boxplot(data=df[['Baseline', 'Proposed']], palette="Set2")
+        plt.title("Pure ALNS vs. PPO Hyper-heuristic")
+        plt.ylabel("Cost")
+        plt.savefig(os.path.join(PROJECT_ROOT, "benchmark_final.png"))
+        print(f"📈 Đã lưu biểu đồ tại {os.path.join(PROJECT_ROOT, 'benchmark_final.png')}")
+    except: pass
+
+if __name__ == "__main__":
+    main()

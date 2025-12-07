@@ -9,15 +9,12 @@ import os
 import sys
 
 # ==============================================================================
-# [FIX PATH]: ÉP ĐƯỜNG DẪN SRC VÀO HỆ THỐNG
+# 1. FIX ĐƯỜNG DẪN & IMPORT
 # ==============================================================================
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_path = os.path.abspath(os.path.join(current_dir, '..', '..'))
 if src_path not in sys.path: sys.path.insert(0, src_path)
 
-# ==============================================================================
-# 1. IMPORT MODULES
-# ==============================================================================
 try:
     from routing.cvrp.alns_cvrp.cvrp_env import cvrpEnv
     from routing.cvrp.alns_cvrp.initial_solution import compute_initial_solution
@@ -55,7 +52,7 @@ def get_op_name(op):
     return str(op)
 
 # ==============================================================================
-# 3. CLASS PPO ALNS (MACRO-OP VERSION - FINAL)
+# 3. CLASS PPO ALNS (MACRO-OP VERSION)
 # ==============================================================================
 class PPO_ALNS_Env_GP(gym.Env):
     def __init__(self, problem_instance, max_iterations=200, buffer_size=1, **kwargs):
@@ -66,59 +63,46 @@ class PPO_ALNS_Env_GP(gym.Env):
         
         # --- LOAD TUYỆT KỸ TỪ JSON ---
         json_filename = 'macro_advanced_safety.json'
-        # Tìm ở thư mục hiện tại hoặc thư mục gốc
+        # Tìm file ở thư mục hiện tại hoặc root
         json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), json_filename)
-        if not os.path.exists(json_path): json_path = json_filename 
+        if not os.path.exists(json_path): 
+            json_path = json_filename # Thử tìm ở root
 
         if os.path.exists(json_path):
             with open(json_path, 'r') as f:
                 self.macro_ops = json.load(f)
-            print(f"✅ [Env] Loaded {len(self.macro_ops)} Macro-Operators from {json_filename}")
+            print(f"✅ [Env] Loaded {len(self.macro_ops)} Macro-Operators.")
         else:
-            print(f"⚠️ [Env] Warning: '{json_filename}' not found. Dummy mode activated.")
+            print(f"⚠️ [Env] Warning: '{json_filename}' not found. Using dummy mode.")
             self.macro_ops = []
 
-        # --- ACTION SPACE ---
+        # --- ACTION SPACE: Chọn 1 trong N Tuyệt kỹ ---
         self.num_actions = len(self.macro_ops) if self.macro_ops else 10
         self.action_space = spaces.Discrete(self.num_actions)
         
-        # --- OBSERVATION SPACE ---
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32)
-        
         self.max_iterations = max_iterations
-        self.buffer_size = buffer_size 
+        self.buffer_size = buffer_size # Luôn là 1 ở chế độ này
 
-        # Init variables
         self.current_solution = None
         self.best_solution = None
         self.history_matrix = {}
         
+        # Init các biến theo dõi
         self.best_objective = float('inf')
         self.initial_objective = float('inf')
-        self.best_time_penalty = 0
-        self.best_wait_time = 0
-        self.best_capacity_penalty = 0
-        
         self.stag_count = 0
         self.current_iteration = 0
-        
-        # [SỬA 2]: Thêm biến theo dõi lịch sử hành động để chống spam
-        self.last_actions = []
-        
 
-    # ==========================================================================
-    # HÀM HỖ TRỢ (HELPER METHODS)
-    # ==========================================================================
-    
+    # --- HÀM CẤP CỨU (SAFETY NET) ---
     def _sanitize_and_repair(self, solution):
-        """Hàm cấp cứu: Sửa lỗi vi phạm cứng (Silent Mode)"""
         sol = cleanup_inter_factory_routes(solution)
         _, time_pen, _, cap_pen = sol.objective()
         
         if time_pen == 0 and cap_pen == 0:
             return sol
 
-        # Dùng TimeWorst để sửa lỗi
+        # Dùng TimeWorst để sửa lỗi (không in log để chạy nhanh)
         destroy_op = time_worst_removal
         op_kwargs = {'remove_fraction': 0.10, 'history_matrix': self.history_matrix}
         
@@ -132,29 +116,20 @@ class PPO_ALNS_Env_GP(gym.Env):
                 return repaired
         return destroyed
 
+    # --- HÀM THỰC THI TUYỆT KỸ ---
     def _execute_macro_op(self, op_index, solution):
-        """Thực thi Tuyệt kỹ từ JSON"""
         current_temp = copy.deepcopy(solution)
         
         if not self.macro_ops: return current_temp 
-        
-        # [FIX MODULO]: Tránh lỗi index out of range
-        if op_index >= len(self.macro_ops):
-            op_index = op_index % len(self.macro_ops)
             
         op_data = self.macro_ops[op_index]
         sequence_indices = op_data['sequence_indices'] 
         op_kwargs = {'history_matrix': self.history_matrix}
 
         for i, step_indices in enumerate(sequence_indices):
-            # Giải mã 2 hoặc 3 tham số (Fallback nếu JSON cũ)
-            if len(step_indices) == 2:
-                d_idx, r_idx = step_indices
-                p_idx = 2 # Default 15%
-            else:
-                d_idx, p_idx, r_idx = step_indices
+            d_idx, p_idx, r_idx = step_indices
             
-            # [SAFETY NET]: Chạy Sanitize giữa đường nếu chuỗi dài
+            # Safety Net cho chuỗi dài
             if i >= 2: current_temp = self._sanitize_and_repair(current_temp)
 
             try:
@@ -181,57 +156,25 @@ class PPO_ALNS_Env_GP(gym.Env):
         current_temp = optimize_all_start_times(current_temp)
         return current_temp
 
-    # ==========================================================================
-    # GYM INTERFACE
-    # ==========================================================================
-
+    # --- GYM INTERFACE ---
     def reset(self, seed=None, options=None):
-        # 1. Thiết lập Seed
-        if seed is not None:
-            self.random_state = np.random.RandomState(seed)
-            
-        print(f">>> [Env] Resetting PPO Environment (Seed: {seed})...")
+        if seed is not None: self.random_state = np.random.RandomState(seed)
         
-        # 2. Tạo giải pháp ban đầu (Raw Solution)
-        # Lưu ý: Dùng self.random_state để đảm bảo đồng bộ
+        # Fix lỗi seed cho cvrpEnv
+        sim_seed = self.random_state.randint(0, 1000000)
         initial_schedule = compute_initial_solution(self.problem_instance, self.random_state)
         
-        # Fix seed cho Env con
-        sim_seed = self.random_state.randint(0, 1000000)
         self.initial_solution = cvrpEnv(initial_schedule, self.problem_instance, seed=sim_seed)
-        
-        # ======================================================================
-        # [FIX QUAN TRỌNG]: PHẢI LÀM SẠCH VÀ TỐI ƯU NGAY TỪ ĐẦU
-        # ======================================================================
-        
-        # Bước A: Dọn dẹp các tuyến Inter-Factory rác (nếu có)
         self.initial_solution = cleanup_inter_factory_routes(self.initial_solution)
         
-        # Bước B: Tối ưu thời gian xuất phát (Giảm Waiting Time) -> Giảm Cost mạnh
-        # Đây chính là lý do Baseline thấp hơn PPO (49k vs 52k)
-        self.initial_solution = optimize_all_start_times(self.initial_solution)
-        
-        # ======================================================================
-        
-        # 3. Khởi tạo các biến theo dõi
         self.current_solution = copy.deepcopy(self.initial_solution)
         self.best_solution = copy.deepcopy(self.initial_solution)
-        
         self.history_matrix = {}
         update_history_matrix(self.history_matrix, self.current_solution)
         
-        # 4. Tính toán metrics ban đầu
         metrics = self.initial_solution.objective()
         self.initial_objective = metrics[0]
         self.best_objective = metrics[0]
-        
-        # Lưu chi tiết để debug nếu cần
-        self.best_time_penalty = metrics[1]
-        self.best_wait_time = metrics[2]
-        self.best_capacity_penalty = metrics[3]
-        
-        print(f"    -> Initial Objective (Optimized): {self.initial_objective:.2f}")
-
         self.stag_count = 0
         self.current_iteration = 0
         
@@ -262,39 +205,23 @@ class PPO_ALNS_Env_GP(gym.Env):
         return state
 
     def step(self, action):
-        op_index = int(action)
+        # [QUAN TRỌNG]: Action là 1 số nguyên (Index của Tuyệt kỹ)
+        op_index = int(action) 
         self.current_iteration += 1
         
-        # --- [SỬA 3a]: CƠ CHẾ CHỐNG SPAM ---
-        # Lưu hành động vào lịch sử
-        self.last_actions.append(op_index)
-        if len(self.last_actions) > 5: self.last_actions.pop(0)
-        
-        spam_penalty = 0
-        # Nếu 3 lần gần nhất chọn y hệt nhau -> Phạt nặng
-        if len(self.last_actions) >= 3 and all(x == op_index for x in self.last_actions[-3:]):
-            spam_penalty = -5.0 # Phạt 5 điểm (bằng một nửa New Best)
-            # print(f"🚫 Spam Warning: Op #{op_index} repeated!")
-
-        # --- LẤY THÔNG TIN ĐỂ TÍNH BONUS ---
-        op_data = self.macro_ops[op_index]
-        seq_len = len(op_data['sequence_indices']) # Độ dài chuỗi (1, 2, 3...)
-
         objective_before = self.current_solution.objective()[0]
         
-        # 1. Thực thi
+        # 1. Thực thi Tuyệt kỹ
         new_solution = self._execute_macro_op(op_index, self.current_solution)
         update_history_matrix(self.history_matrix, new_solution)
         
         final_results = new_solution.objective()
         objective_after = final_results[0]
         
-        # 2. Tính Reward Cơ bản
-        raw_improvement = (objective_before - objective_after) / (objective_before + 1e-6)
-        clipped_improvement = max(-0.5, min(raw_improvement, 1.0))
-        reward = clipped_improvement * 10 
+        # 2. Tính Reward & Acceptance
+        improvement = (objective_before - objective_after) / (objective_before + 1e-6)
+        reward = improvement * 10 
         
-        # 3. Acceptance (SA)
         accepted = False
         is_new_best = False
         
@@ -305,44 +232,29 @@ class PPO_ALNS_Env_GP(gym.Env):
             current_temp = (self.initial_objective * 0.05) * (1 - progress)
             current_temp = max(current_temp, 1e-6)
             diff = objective_after - objective_before
+            
             if diff > self.initial_objective * 0.5: probability = 0
             else: probability = math.exp(-diff / current_temp)
+                
             if self.random_state.rand() < probability: accepted = True
 
-        # 4. Cập nhật & Thưởng/Phạt
+        # 3. Cập nhật
         if accepted:
             self.current_solution = new_solution
-            
-            # --- [SỬA 3b]: THƯỞNG ĐẬM CHO CHUỖI DÀI ---
-            if seq_len > 1:
-                # Thưởng: Len 2 -> +3 điểm, Len 3 -> +6 điểm...
-                complexity_bonus = (seq_len - 1) * 3.0 
-                reward += complexity_bonus
-
             if objective_after < self.best_objective:
                 self.best_objective = objective_after
                 self.best_solution = copy.deepcopy(new_solution)
                 is_new_best = True
-                
-                self.best_time_penalty = final_results[1]
-                self.best_wait_time = final_results[2]
-                self.best_capacity_penalty = final_results[3]
-                
-                print(f"🎉 New Best (Op #{op_index} Len {seq_len}): {self.best_objective:.2f}")
+                # Log nhẹ để biết có tiến triển
+                # print(f"🎉 New Best: {self.best_objective:.2f} (Op #{op_index})")
 
         if is_new_best:
             self.stag_count = 0
             reward += 20.0 
         else:
             self.stag_count += 1
-            if not accepted: reward -= 0.5 
-            elif raw_improvement <= 0: reward -= 0.1
-
-        # Cộng phạt spam vào reward cuối cùng
-        reward += spam_penalty
-        
-        # Kẹp reward để không bị âm vô cực
-        reward = max(reward, -10.0) 
+            if not accepted: reward -= 0.5
+            elif improvement <= 0: reward -= 0.1
 
         done = self.current_iteration >= self.max_iterations
         info = {'best_objective': self.best_objective}

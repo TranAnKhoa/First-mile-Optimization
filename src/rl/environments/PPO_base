@@ -1,0 +1,505 @@
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+import copy
+import math
+import random
+from deap import base, creator, tools
+import os
+import sys
+from deap import base, creator, tools, algorithms
+# ==============================================================================
+# [FIX QUAN TRỌNG]: THÊM ĐƯỜNG DẪN 'src' VÀO HỆ THỐNG
+# ==============================================================================
+# Lấy đường dẫn đến thư mục chứa file này (src/rl/environments)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Lùi lại 2 cấp để lấy thư mục 'src' (C:\AnKhoa\Project_Code\src)
+src_path = os.path.abspath(os.path.join(current_dir, '..', '..'))
+
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+# ==============================================================================
+
+# ==============================================================================
+# IMPORT MODULE ALNS (Đã sửa lại để chắc chắn tìm thấy)
+# ==============================================================================
+try:
+    # Thử import trực tiếp từ routing (nếu src đã có trong path)
+    from routing.cvrp.alns_cvrp.cvrp_env import cvrpEnv
+    from routing.cvrp.alns_cvrp.initial_solution import compute_initial_solution
+    
+    # Import Operators
+    from routing.cvrp.alns_cvrp.destroy_operators import (
+        random_removal, worst_removal_alpha_0, worst_removal_bigM, 
+        worst_removal_adaptive, time_worst_removal, shaw_spatial, 
+        shaw_hybrid, shaw_temporal, shaw_structural, trip_removal, 
+        historical_removal,update_solution_state_after_destroy, infeasible_constraint_removal
+    )
+    
+    from routing.cvrp.alns_cvrp.repair_operators import (
+        best_insertion, regret_2_position, regret_2_trip, regret_2_vehicle, 
+        regret_3_position, regret_3_trip, regret_3_vehicle, 
+        regret_4_position, regret_4_trip, regret_4_vehicle
+    )
+    
+    # Import Utils (Các hàm mới sửa)
+    from routing.cvrp.alns_cvrp.utils import (
+        optimize_all_start_times, 
+        update_history_matrix, 
+        cleanup_inter_factory_routes
+    )
+    
+    print("✅ [Env] Đã import thành công các module ALNS!")
+
+except ImportError as e:
+    print(f"❌ [Env] LỖI IMPORT NGHIÊM TRỌNG: {e}")
+    print(f"Current Sys Path: {sys.path}")
+    # Re-raise để dừng chương trình ngay, không dùng dummy class nữa (vì dummy sẽ làm train sai)
+    raise e
+def get_op_name(op):
+    """
+    Tự động nhận diện tham số của Partial để in ra tên cụ thể.
+    Ví dụ: regret_k_insertion(k=2, mode='trip') -> regret_2_trip
+    """
+    # 1. Nếu hàm có tên chính chủ (Hàm thường)
+    if hasattr(op, '__name__'):
+        return op.__name__
+
+    # 2. Nếu là Partial (Biến thể dùng functools.partial)
+    if hasattr(op, 'func'):
+        base_name = op.func.__name__
+        kwargs = op.keywords if op.keywords else {}
+
+        # --- TỰ ĐỘNG ĐẶT TÊN CHO REGRET ---
+        if base_name == 'regret_k_insertion':
+            k = kwargs.get('k_regret', '?')
+            mode = kwargs.get('mode', 'position') # Mặc định là position
+            return f"regret_{k}_{mode}"
+
+        # --- TỰ ĐỘNG ĐẶT TÊN CHO WORST REMOVAL ---
+        if base_name == 'worst_removal':
+            alpha = kwargs.get('alpha', None)
+            if alpha == 0: return "worst_removal_alpha_0"
+            if alpha is not None and alpha > 100: return "worst_removal_bigM"
+            return "worst_removal_adaptive"
+
+        # --- TỰ ĐỘNG ĐẶT TÊN CHO SHAW ---
+        if base_name == 'shaw_removal':
+            w_dist = kwargs.get('w_dist', 0)
+            w_tw = kwargs.get('w_tw', 0)
+            w_depot = kwargs.get('w_depot', 0)
+            w_access = kwargs.get('w_access', 0)
+            
+            if w_dist == 1.0 and w_tw == 0: return "shaw_spatial"
+            if w_tw == 1.0: return "shaw_temporal"
+            if w_depot > 0 and w_access > 0: return "shaw_structural"
+            if w_dist == 1.0 and w_tw == 0.5: return "shaw_hybrid"
+
+        return f"{base_name}_partial"
+
+    return str(op)
+# ==============================================================================
+# LỚP GP_Matching (GIỮ NGUYÊN CỦA BẠN)
+# ==============================================================================
+# ==============================================================================
+# LỚP GP_Matching (PHIÊN BẢN DOUBLE PERMUTATION - ĐÃ FIX LỖI SELECT)
+# ==============================================================================
+class GP_Matching: 
+    def __init__(self, destroy_ops, repair_ops, fitness_fn, current_solution, ngen=10, pop_size=10):
+        if len(destroy_ops) != len(repair_ops):
+            raise ValueError("Số lượng toán tử Destroy và Repair phải bằng nhau")
+            
+        self.destroy_ops = destroy_ops 
+        self.repair_ops = repair_ops
+        self.num_pairs = len(destroy_ops)
+        
+        self.base_solution = current_solution
+        self.fitness_fn = fitness_fn
+        self.ngen = ngen
+        self.pop_size = pop_size
+
+        # --- Setup DEAP ---
+        if not hasattr(creator, "FitnessMin"): 
+            creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+        if not hasattr(creator, "Individual"):
+            creator.create("Individual", list, fitness=creator.FitnessMin)
+
+        self.toolbox = base.Toolbox()
+
+        # 1. KHỞI TẠO CÁ THỂ
+        def init_double_permutation(icls, size):
+            perm1 = random.sample(range(size), size) # Hoán vị cho Destroy
+            perm2 = random.sample(range(size), size) # Hoán vị cho Repair
+            return icls(perm1 + perm2)
+
+        self.toolbox.register("individual", init_double_permutation, creator.Individual, self.num_pairs)
+        self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
+
+        # 2. HÀM LAI GHÉP (MATE)
+        def cxTwoPartOrdered(ind1, ind2):
+            size = len(ind1) // 2
+            tools.cxOrdered(ind1[:size], ind2[:size])
+            tools.cxOrdered(ind1[size:], ind2[size:])
+            return ind1, ind2
+
+        self.toolbox.register("mate", cxTwoPartOrdered)
+
+        # 3. HÀM ĐỘT BIẾN (MUTATE)
+        def mutTwoPartShuffle(ind, indpb):
+            size = len(ind) // 2
+            tools.mutShuffleIndexes(ind[:size], indpb)
+            tools.mutShuffleIndexes(ind[size:], indpb)
+            return ind,
+
+        self.toolbox.register("mutate", mutTwoPartShuffle, indpb=0.3)
+
+        # 4. HÀM CHỌN LỌC (SELECT) - [ĐÃ BỔ SUNG ĐỂ SỬA LỖI]
+        # Sử dụng Tournament Selection (Chọn lọc cạnh tranh)
+        self.toolbox.register("select", tools.selTournament, tournsize=3)
+        
+        # 5. HÀM ĐÁNH GIÁ (EVALUATE)
+        def eval_func(individual):
+            sequence = []
+            d_indices = individual[:self.num_pairs] 
+            r_indices = individual[self.num_pairs:] 
+            
+            for i in range(self.num_pairs):
+                d_op = self.destroy_ops[d_indices[i]]
+                r_op = self.repair_ops[r_indices[i]]
+                sequence.append((d_op, r_op))
+            
+            temp_solution_for_eval = copy.deepcopy(self.base_solution)
+            return (self.fitness_fn(sequence, temp_solution_for_eval),)
+        
+        self.toolbox.register("evaluate", eval_func)
+
+    def run(self):
+        pop = self.toolbox.population(n=self.pop_size)
+        
+        # Chạy thuật toán di truyền
+        # Lưu ý: Đảm bảo đã import algorithms ở đầu file: from deap import algorithms
+        final_pop = algorithms.eaSimple(pop, self.toolbox, cxpb=0.7, mutpb=0.2, 
+                                        ngen=self.ngen, verbose=False)
+        
+        best_ind = tools.selBest(pop, 1)[0]
+        
+        best_seq = []
+        d_indices = best_ind[:self.num_pairs]
+        r_indices = best_ind[self.num_pairs:]
+        
+        for i in range(self.num_pairs):
+            d_op = self.destroy_ops[d_indices[i]]
+            r_op = self.repair_ops[r_indices[i]]
+            best_seq.append((d_op, r_op))
+            
+        return best_seq
+
+# ==============================================================================
+# MÔI TRƯỜNG PPO TÍCH HỢP GP (ĐÃ SỬA ĐỔI)
+# ==============================================================================
+class PPO_ALNS_Env_GP(gym.Env):
+    def __init__(self, problem_instance, max_iterations = 125, buffer_size=4, **kwargs):
+        super(PPO_ALNS_Env_GP, self).__init__()
+        
+        self.problem_instance = problem_instance
+        self.random_state = np.random.RandomState()
+        
+        # Import các operators
+        self.destroy_operators = [random_removal, worst_removal_alpha_0, worst_removal_bigM, worst_removal_adaptive, time_worst_removal, shaw_spatial, shaw_hybrid, shaw_temporal, shaw_structural, trip_removal, historical_removal]
+        self.repair_operators = [best_insertion, regret_2_position, regret_2_trip, regret_2_vehicle, regret_3_position, regret_3_trip, regret_3_vehicle, regret_4_position, regret_4_trip, regret_4_vehicle]
+        
+        self.action_space = spaces.MultiDiscrete([len(self.destroy_operators), len(self.repair_operators)])
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32)
+
+        self.max_iterations = max_iterations 
+        self.buffer_size = buffer_size
+        self.destroy_buffer = []
+        self.repair_buffer = []
+
+        # Các biến theo dõi
+        self.current_solution = None
+        self.initial_solution = None
+        self.best_solution = None
+        self.initial_objective = float('inf')
+        self.best_objective = float('inf')
+        self.stag_count = 0
+        self.current_iteration = 0
+        self.start_temperature = kwargs.get('start_temperature', 1)
+        
+        self.history_matrix = {}
+        
+        # [MỚI] Biến đếm số lần liên tiếp không tìm thấy lời giải feasible
+        self.infeasible_counter = 0
+
+    # [MỚI] HÀM CẤP CỨU
+    # Nhớ import ở đầu file environment
+# from routing.cvrp.alns_cvrp.destroy_operators import infeasible_constraint_removal
+
+    def _sanitize_and_repair(self, solution):
+        """
+        Hàm cấp cứu: Rà soát và sửa các vi phạm cứng (Capacity & Overlap).
+        """
+        print("🚨 [Emergency] Triggering Sanitize and Repair (Hard Constraints)...")
+        
+        # 1. Dọn dẹp cấu trúc
+        sol = cleanup_inter_factory_routes(solution)
+        
+        # 2. GỌI TOÁN TỬ INFEASIBLE REMOVAL
+        # Fraction nên để khoảng 0.2 - 0.3 để đủ rộng cho việc sắp xếp lại
+        destroy_op = infeasible_constraint_removal
+        op_kwargs = {'remove_fraction': 0.25} 
+        
+        # Logic destroy trả về (new_sol, list_removed_ids)
+        destroyed, unvisited = destroy_op(sol, self.random_state, **op_kwargs)
+        
+        # Nếu không có gì bị xóa -> Nghĩa là không có vi phạm Overlap/Capacity
+        if not unvisited:
+            print("   -> Solution is feasible (checking Hard Constraints). No repair needed.")
+            return sol
+
+        print(f"   -> Detected Hard Violations. Removed {len(unvisited)} customers.")
+        destroyed = update_solution_state_after_destroy(destroyed)
+        
+        # 3. Chèn lại an toàn bằng Regret-3-Trip
+        # Regret-3-Trip rất mạnh trong việc tìm khe hở cho Multi-trip
+        if unvisited:
+            farms = [c for c in unvisited if not str(c).startswith('TRANSFER_')]
+            if farms:
+                # Regret 3 Trip (Mode trip quan trọng cho Multi-trip)
+                repaired, _ = regret_3_trip(destroyed, self.random_state, unvisited_customers=farms)
+                return repaired
+                
+        return destroyed
+
+    def _execute_operator_sequence(self, sequence, solution_to_mod):
+        current_temp = solution_to_mod
+        progress = self.current_iteration / self.max_iterations
+        
+        base_remove = 0.15 if len(sequence) >= 2 else 0.2
+        MAX_REMOVE = base_remove
+        MIN_REMOVE = 0.05
+        remove_fraction = MAX_REMOVE - (MAX_REMOVE - MIN_REMOVE) * progress
+        
+        op_kwargs = {
+            'remove_fraction': remove_fraction,
+            'history_matrix': self.history_matrix
+        }
+
+        for i, (destroy_op, repair_op) in enumerate(sequence):
+            current_temp = cleanup_inter_factory_routes(current_temp)
+            destroyed, unvisited = destroy_op(current_temp, self.random_state, **op_kwargs)
+            destroyed = update_solution_state_after_destroy(destroyed)
+            
+            if unvisited:
+                farms_only = [c for c in unvisited if not str(c).startswith('TRANSFER_')]
+                if farms_only:
+                    repaired, _ = repair_op(destroyed, self.random_state, unvisited_customers=farms_only)
+                    current_temp = repaired
+                else:
+                    current_temp = destroyed
+            else:
+                current_temp = destroyed
+            
+        return current_temp
+
+    def _fitness_function_for_gp(self, sequence, temp_solution):
+        final_sol = self._execute_operator_sequence(sequence, temp_solution)
+        return final_sol.objective()[0]
+
+    def reset(self):
+        print(">>> Môi trường PPO được reset...")
+        initial_schedule = compute_initial_solution(self.problem_instance, self.random_state)
+        self.initial_solution = cvrpEnv(initial_schedule, self.problem_instance, seed=None)
+        
+        self.initial_solution = cleanup_inter_factory_routes(self.initial_solution)
+        
+        self.current_solution = copy.deepcopy(self.initial_solution)
+        self.best_solution = copy.deepcopy(self.initial_solution)
+        
+        self.history_matrix = {}
+        update_history_matrix(self.history_matrix, self.current_solution)
+        
+        initial_results = self.initial_solution.objective()
+        self.initial_objective = initial_results[0]
+        self.best_objective = initial_results[0]
+        
+        self.best_time_penalty = initial_results[1]
+        self.best_wait_time = initial_results[2]
+        self.best_capacity_penalty = initial_results[3]
+
+        self.stag_count = 0
+        self.current_iteration = 0
+        self.destroy_buffer = []
+        self.repair_buffer = []
+        
+        # [MỚI] Reset counter infeasible
+        self.infeasible_counter = 0
+        
+        return self._get_state()
+
+    def _get_state(self):
+        current_metrics = self.current_solution.objective()
+        current_obj, time_penalty, wait_time, cap_penalty = current_metrics[:4]
+        epsilon = 1e-6
+
+        state = np.array([
+            (current_obj - self.best_objective) / (self.best_objective + epsilon),
+            self.stag_count / ((self.max_iterations / 10) + epsilon),
+            self.current_iteration / self.max_iterations,
+            (self.start_temperature * (0.999 ** (self.current_iteration * self.buffer_size))) / self.start_temperature,
+            current_obj / (self.initial_objective + epsilon),
+            time_penalty / (current_obj + epsilon),
+            cap_penalty / (current_obj + epsilon),
+            wait_time / (current_obj + epsilon),
+            len(self.current_solution.schedule) / (len(self.initial_solution.schedule) + epsilon)
+        ], dtype=np.float32)
+        
+        return state
+
+    def step(self, action):
+        destroy_idx, repair_idx = action
+        
+        destroy_op = self.destroy_operators[destroy_idx]
+        repair_op = self.repair_operators[repair_idx]
+        
+        self.destroy_buffer.append(destroy_op)
+        self.repair_buffer.append(repair_op)
+
+        # --- TRƯỜNG HỢP 1: BUFFER CHƯA ĐẦY ---
+        if len(self.destroy_buffer) < self.buffer_size:
+            done = self.current_iteration >= self.max_iterations
+            return self._get_state(), 0, done, False, {'best_objective': self.best_objective}
+
+        # --- TRƯỜNG HỢP 2: BUFFER ĐẦY ---
+        self.current_iteration += 1
+        
+        print(f"\n--- Buffer đầy (Size {self.buffer_size}). Iter {self.current_iteration}. Thực thi Sequence... ---")
+
+        best_sequence = list(zip(self.destroy_buffer, self.repair_buffer))
+
+        print(f"💎 Direct Sequence Execution:")
+        for i, (d_op, r_op) in enumerate(best_sequence, 1):
+            print(f"   Step {i}: [{get_op_name(d_op)}] -> [{get_op_name(r_op)}]")
+
+        # B. Thực thi chuỗi
+        objective_before = self.current_solution.objective()[0]
+        
+        new_solution = copy.deepcopy(self.current_solution)
+        new_solution = self._execute_operator_sequence(best_sequence, new_solution)
+        new_solution = optimize_all_start_times(new_solution)
+        
+        update_history_matrix(self.history_matrix, new_solution)
+
+        # ======================================================================
+        # [MỚI] KIỂM TRA FEASIBLE VÀ KÍCH HOẠT SỬA CHỮA
+        # ======================================================================
+# ======================================================================
+        # [MỚI] KIỂM TRA FEASIBLE (Đã vá lỗi Logic "Vứt khách")
+        # ======================================================================
+        metrics_temp = new_solution.objective()
+        temp_time_pen = metrics_temp[1]
+        temp_cap_pen = metrics_temp[3]
+        current_obj = metrics_temp[0] # Lấy tổng objective hiện tại
+        
+        # Ngưỡng an toàn: Nếu Objective > 1.000.000 nghĩa là chắc chắn có Penalty 
+        # (dù là Time, Cap hay Dropped Customer)
+        PENALTY_THRESHOLD = 1_000_000 
+        
+        # Điều kiện Feasible chặt chẽ hơn:
+        # 1. Không vi phạm Time
+        # 2. Không vi phạm Capacity
+        # 3. Tổng chi phí phải hợp lý (nghĩa là không bị phạt Dropped Customer)
+        if temp_time_pen == 0 and temp_cap_pen == 0 and current_obj < PENALTY_THRESHOLD:
+            self.infeasible_counter = 0
+        else:
+            self.infeasible_counter += 1
+            print(f"⚠️ Infeasible count: {self.infeasible_counter}/10 (Obj: {current_obj:.0f})")
+
+        # Kích hoạt sửa chữa
+        if self.infeasible_counter >= 10:
+            new_solution = self._sanitize_and_repair(new_solution)
+            new_solution = optimize_all_start_times(new_solution)
+            
+            # Sau khi sửa xong thì bắt buộc reset
+            self.infeasible_counter = 0
+
+        # Kích hoạt sửa chữa nếu quá 10 lần infeasible
+        if self.infeasible_counter >= 10:
+            new_solution = self._sanitize_and_repair(new_solution)
+            new_solution = optimize_all_start_times(new_solution) # Tối ưu lại time sau khi sửa
+            self.infeasible_counter = 0 # Reset counter sau khi sửa
+        
+        # C. Tính toán kết quả (Lấy lại objective sau khi có thể đã sửa)
+        final_results = new_solution.objective()
+        objective_after = final_results[0]
+        print("New_objective: ", objective_after)
+
+        # D. Tính Reward
+        improvement = (objective_before - objective_after) / (objective_before + 1e-6)
+        reward = improvement * 10 
+        
+        # ======================================================================
+        # E. CƠ CHẾ CHẤP NHẬN
+        # ======================================================================
+        accepted = False
+        is_new_best = False
+
+        if objective_after < objective_before:
+            accepted = True
+        else:
+            progress = self.current_iteration / self.max_iterations
+            current_temp = (self.initial_objective * 0.05) * (1 - progress)
+            current_temp = max(current_temp, 1e-6) 
+            
+            diff = objective_after - objective_before
+            
+            if diff > self.initial_objective * 0.5:
+                probability = 0
+            else:
+                probability = math.exp(-diff / current_temp)
+            
+            if self.random_state.rand() < probability:
+                accepted = True
+            else:
+                accepted = False
+
+        # ======================================================================
+        # F. CẬP NHẬT TRẠNG THÁI
+        # ======================================================================
+        if accepted:
+            self.current_solution = new_solution
+            
+            if objective_after < self.best_objective:
+                self.best_objective = objective_after
+                self.best_solution = copy.deepcopy(new_solution)
+                is_new_best = True
+                
+                self.best_time_penalty = final_results[1]
+                self.best_wait_time = final_results[2]
+                self.best_capacity_penalty = final_results[3]
+                
+                print(f"🎉 New Best: {self.best_objective:.2f}")
+
+        # G. Tinh chỉnh Reward
+        if is_new_best:
+            self.stag_count = 0
+            reward += 20.0 
+        else:
+            self.stag_count += 1
+            if not accepted:
+                reward -= 0.5
+            elif improvement <= 0:
+                reward -= 0.1
+
+        # H. Dọn dẹp & Return
+        self.destroy_buffer = [] 
+        self.repair_buffer = [] 
+
+        done = self.current_iteration >= self.max_iterations
+        next_state = self._get_state()
+        info = {
+            'best_objective': self.best_objective,
+            'accepted': accepted
+        }
+
+        return next_state, reward, done, False, info

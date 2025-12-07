@@ -7,9 +7,9 @@ import math
 from collections import defaultdict
 
 # --- 1. CẤU HÌNH ---
-EXCEL_FILE_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\Small_sample.xlsx'
+EXCEL_FILE_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_400.xlsx'
 # Tên file output thống nhất
-PKL_OUTPUT_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_instance.pkl'
+PKL_OUTPUT_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_400.pkl'
 # Tên các sheet
 SHEET_FACILITY_MASTER = 'FacilityMaster'
 SHEET_FARM_MASTER = 'FarmMaster'
