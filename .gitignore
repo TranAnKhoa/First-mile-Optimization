@@ -1,0 +1,10 @@
+# Python bytecode và cache
+__pycache__/
+*.pyc
+
+# Thư mục cấu hình của VS Code
+.vscode/
+
+# Thư mục môi trường ảo (nếu bạn dùng)
+venv/
+.env
