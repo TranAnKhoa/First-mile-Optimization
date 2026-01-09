@@ -44,7 +44,7 @@ Instead of relying solely on standard adaptive weight adjustments, this framewor
 For a comprehensive dive into the mathematical formulation, algorithmic design, and experimental results, please refer to the full presentation slides:
 
 👉 **[Access Presentation Slides (PPT/PDF)][First Mile Slide Presentation.pdf](https://github.com/user-attachments/files/24532909/First.Mile.Slide.Presentation.pdf)
-()**
+**
 
 ---
 
