@@ -6,9 +6,9 @@
 
 ## 📌 Overview
 
-This project originates from a research collaboration between **[Your University/Department Name]** and **CEL Consulting**.
+This project originates from a research collaboration between **International University (HCMIU)** and **CEL Consulting**.
 
-The primary objective is to solve the **First Mile Logistics Optimization** problem—a critical and costly component of the supply chain involving the movement of goods from local merchants to consolidation centers. Beyond traditional optimization methods, this research proposes a novel **Hybrid Search Architecture** designed to enhance solution quality and convergence speed.
+The primary objective is to solve the **First Mile Logistics Optimization** problem—a critical and costly component of the supply chain involving the movement of goods from farms to factories. Beyond traditional optimization methods, this research proposes a novel **Hybrid Search Architecture** designed to enhance solution quality and convergence speed.
 
 ---
 
@@ -43,7 +43,8 @@ Instead of relying solely on standard adaptive weight adjustments, this framewor
 
 For a comprehensive dive into the mathematical formulation, algorithmic design, and experimental results, please refer to the full presentation slides:
 
-👉 **[Access Presentation Slides (PPT/PDF)](LINK_TO_YOUR_PPT_SLIDES)**
+👉 **[Access Presentation Slides (PPT/PDF)][First Mile Slide Presentation.pdf](https://github.com/user-attachments/files/24532909/First.Mile.Slide.Presentation.pdf)
+()**
 
 ---
 
@@ -52,13 +53,12 @@ For a comprehensive dive into the mathematical formulation, algorithmic design, 
 * **Language:** Python
 * **Core Algorithm:** ALNS (Adaptive Large Neighborhood Search)
 * **AI/ML Integration:** Reinforcement Learning (PPO/DQN), Genetic Programming
-* **Libraries:** NumPy, Pandas, [Add other libs like PyTorch/DEAP if used]
-
+* **Libraries:** NumPy, Pandas, Stable Baselines3, Pytorch, DEAP, gymnasium, etc..
 ---
 
 ## 🤝 Acknowledgments & Contact
 
-This research was conducted by **[Your Name]** with data support and industry insights provided by **CEL Consulting**.
+This research was conducted by **Our group** with data support and industry insights provided by **CEL Consulting**.
 
-* **Email:** [Your Email]
+* **Email:** khoatran201105@gmail.com
 * **LinkedIn:** [Your Profile Link]
