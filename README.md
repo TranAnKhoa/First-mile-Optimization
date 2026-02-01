@@ -61,4 +61,4 @@ For a comprehensive dive into the mathematical formulation, algorithmic design, 
 This research was conducted by **Our group** with data support and industry insights provided by **CEL Consulting**.
 
 * **Email:** khoatran201105@gmail.com
-* **LinkedIn:** [Your Profile Link]
+* **LinkedIn:** (https://www.linkedin.com/in/an-khoa-99a237354/)
