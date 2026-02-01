@@ -51,7 +51,7 @@ class cvrpEnv:
 
     def objective(self):
         """
-        (Phiên bản TỐI ƯU - Tin tưởng 6-Tuple)
+        (Phiên bản TỐI ƯU - Tin tưởng 6-Tuple - Đã làm sạch Debug)
         Kiểm tra chồng lấn thời gian dựa trên 'start_time_at_depot' 
         và 'finish_time_route' đã được lưu trữ.
         """
@@ -65,25 +65,27 @@ class cvrpEnv:
         CAP_PENALTY_WEIGHT = 10000000
         unique_trucks_used = set()
         dist_depot_depot = self.problem_instance.get('distance_matrix_depots', None)
-
+        
         # ==========================================================
-        # ‼️ THAY ĐỔI 1: Bộ theo dõi THỜI GIAN "phân thân" ‼️
+        # 1. Khởi tạo bộ theo dõi
         # ==========================================================
-        # (Giữ nguyên logic)
         truck_time_windows_used = defaultdict(list)
         truck_cloning_penalty = 0.0
         CLONE_PENALTY_WEIGHT = 999999
-        # ==========================================================
+        
         if not self.schedule:
             return 0.0, 0.0, 0.0, 0.0
 
+        # ==========================================================
+        # 2. Duyệt từng chuyến để tính Variable Cost & Thu thập Time
+        # ==========================================================
         for route_info in self.schedule:
-            # ‼️ UNPACK 7-TUPLE (Theo thiết kế mới của bạn) ‼️
+            # UNPACK 7-TUPLE
             try:
                 depot_idx, truck_id, customer_list, shift, start_time_at_depot, finish_time_route, route_load = route_info
             except ValueError:
-                # Báo lỗi nếu một hàm nào đó (ví dụ 'destroy') trả về 5-tuple
                 raise ValueError(f"Lỗi Unpack! Cấu trúc route_info không phải là 7-tuple: {route_info}")
+            
             unique_trucks_used.add(truck_id)
             truck_details = find_truck_by_id(truck_id, self.problem_instance['fleet']['available_trucks'])
             if not truck_details: continue
@@ -92,24 +94,14 @@ class cvrpEnv:
                 (truck_details['type'], truck_details['region']), 1.0
             )
 
-            # ==========================================================
-            # ‼️ THAY ĐỔI 2: Thu thập Time Windows (Từ 6-Tuple) ‼️
-            # ==========================================================
-            # Chúng ta tin tưởng 100% vào start/finish time đã lưu
-            # Đây là cửa sổ "Depot-to-Depot" (thời gian xe bận)
+            # Thu thập Time Windows
             key = (truck_id, shift)
             truck_time_windows_used[key].append((start_time_at_depot, finish_time_route))
-            # ==========================================================
 
+            # Xử lý chuyến điều chuyển (INTER-FACTORY)
             if shift == 'INTER-FACTORY':
-                # (Logic INTER-FACTORY giữ nguyên)
                 if dist_depot_depot is not None and customer_list:
                     try:
-                        parts = customer_list[0].split('_')
-                        from_depot = int(parts[2])
-                        to_depot = int(parts[4])
-                        # Lấy dist thực tế từ finish_time và start_time
-                        # (Giả định chi phí đã được tính đúng ở repair)
                         velocity = 1.0 if truck_details['type'] in ["Single", "Truck and Dog"] else 0.5
                         travel_dist = (finish_time_route - start_time_at_depot) * velocity
                         total_variable_cost += travel_dist * var_cost_per_km
@@ -119,59 +111,65 @@ class cvrpEnv:
             if not customer_list:
                 continue
             
-            # ‼️ LƯU Ý VỀ HIỆU SUẤT ‼️
-            # Chúng ta VẪN PHẢI gọi hàm này, không phải để lấy 'finish_time',
-            # mà là để lấy các THÀNH PHẦN CHI PHÍ (dist, wait, penalties).
+            # Tính toán chi phí biến đổi cho chuyến giao hàng thường
             (_is_feasible, total_dist, total_wait, 
             time_penalty, capacity_penalty) = _calculate_route_schedule_and_feasibility(
                 depot_idx, customer_list, shift, start_time_at_depot, finish_time_route, route_load, self.problem_instance, truck_details)
             
-            # (Bạn có thể thêm một 'assert' ở đây để kiểm tra
-            # 'abs(_calc_finish - finish_time_route) < 1e-6' nếu muốn)
-
-            # Cộng dồn chi phí (Giữ nguyên)
             total_capacity_penalty += capacity_penalty
-            total_penalty_cost += time_penalty*TIME_PENALTY 
+            total_penalty_cost += time_penalty * TIME_PENALTY 
             total_variable_cost += total_dist * var_cost_per_km
             total_waiting_cost += total_wait * WAIT_COST_PER_MIN
 
-        # --- Chi phí thuê xe --- (Giữ nguyên)
-        for truck_id in unique_trucks_used:
-            truck_details = find_truck_by_id(truck_id, self.problem_instance['fleet']['available_trucks'])
-            if truck_details:
-                lease_cost_per_day = truck_details.get('lease_cost_monthly', 0) / 30
-                total_fixed_cost += lease_cost_per_day
+        # ==========================================================
+        # 3. TÍNH FIXED COST (Clean Version)
+        # ==========================================================
+        VIRTUAL_SUFFIXES = {222, 333, 444} 
+        
+        for raw_id in unique_trucks_used:
+            try:
+                truck_id = int(raw_id)
+                suffix = truck_id % 1000 
+            except ValueError:
+                suffix = 0 # ID lạ -> coi như xe gốc
+
+            if suffix in VIRTUAL_SUFFIXES:
+                # --- XE ẢO (VIRTUAL) ---
+                # Phải trả phí thuê vì ta đang thuê thêm ngoài
+                truck_details = find_truck_by_id(truck_id, self.problem_instance['fleet']['available_trucks'])
+                if truck_details:
+                    lease_cost = truck_details.get('lease_cost_monthly', 0.0)
+                    total_fixed_cost += lease_cost / 30
+            else:
+                # --- XE GỐC (OWNED) ---
+                # Sunk cost = 0. Khuyến khích tận dụng tối đa xe nhà.
+                pass
 
         # ==========================================================
-        # ‼️ THAY ĐỔI 3: KIỂM TRA CHỒNG LẤP (OVERLAP) ‼️
+        # 4. KIỂM TRA CHỒNG LẤP (OVERLAP)
         # ==========================================================
-        # (Logic này giữ nguyên, nhưng bây giờ nó đang so sánh 
-        # 'start_time_at_depot' và 'finish_time_route' rất rõ ràng)
         for key, time_list in truck_time_windows_used.items():
             if len(time_list) <= 1:
-                continue # Xe này chỉ chạy 1 chuyến (ca này), không thể overlap
+                continue 
 
-            # Sắp xếp các chuyến đi theo thời gian bắt đầu (start_time_at_depot)
             sorted_times = sorted(time_list, key=lambda x: x[0])
             
-            # Kiểm tra chồng lấp
             for i in range(len(sorted_times) - 1):
-                current_trip_finish = sorted_times[i][1] # finish_time_route của chuyến 1
-                next_trip_start = sorted_times[i+1][0]   # start_time_at_depot của chuyến 2
+                current_trip_finish = sorted_times[i][1]
+                next_trip_start = sorted_times[i+1][0]
                 
-                # (Sử dụng 1e-6 để tránh lỗi float)
+                # Check overlap với dung sai nhỏ
                 if next_trip_start < (current_trip_finish - 1e-6): 
-                    # LỖI! Chuyến 2 bắt đầu TRƯỚC khi chuyến 1 kết thúc
                     truck_cloning_penalty += CLONE_PENALTY_WEIGHT
-                    break # Chỉ phạt một lần cho mỗi xe
+                    break 
         
         # ==========================================================
-        # ‼️ THAY ĐỔI 4: Cộng dồn chi phí (Giữ nguyên) ‼️
+        # 5. Tổng hợp chi phí
         # ==========================================================
         total_cost = (total_variable_cost + total_fixed_cost + 
                       total_waiting_cost + total_penalty_cost + 
                       (total_capacity_penalty * CAP_PENALTY_WEIGHT) +
                       truck_cloning_penalty)
-        #print("Penalty from cloning trucks:", truck_cloning_penalty)
+        
         return total_cost, total_penalty_cost, total_waiting_cost, total_capacity_penalty
     

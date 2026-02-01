@@ -1,0 +1,548 @@
+[
+    {
+        "rank": 1,
+        "score": 696295.0317818171,
+        "length": 1,
+        "sequence_indices": [
+            [
+                8,
+                2,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_structural(15%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 4,
+        "score": 494225.7391769784,
+        "length": 1,
+        "sequence_indices": [
+            [
+                7,
+                2,
+                6
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_temporal(15%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 5,
+        "score": 445245.55691380583,
+        "length": 1,
+        "sequence_indices": [
+            [
+                5,
+                2,
+                4
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_spatial(15%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 6,
+        "score": 397058.5818199198,
+        "length": 1,
+        "sequence_indices": [
+            [
+                7,
+                2,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_temporal(15%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 7,
+        "score": 365993.9293523827,
+        "length": 1,
+        "sequence_indices": [
+            [
+                5,
+                1,
+                4
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_spatial(10%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 8,
+        "score": 353726.8475771137,
+        "length": 1,
+        "sequence_indices": [
+            [
+                5,
+                2,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_spatial(15%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 9,
+        "score": 254748.29114896696,
+        "length": 1,
+        "sequence_indices": [
+            [
+                6,
+                2,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_hybrid(15%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 10,
+        "score": 124476.10775034205,
+        "length": 1,
+        "sequence_indices": [
+            [
+                10,
+                2,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[historical_removal(15%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 11,
+        "score": 26230.334362689784,
+        "length": 1,
+        "sequence_indices": [
+            [
+                4,
+                2,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(15%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 12,
+        "score": 580122.3734027719,
+        "length": 4,
+        "sequence_indices": [
+            [
+                4,
+                4,
+                4
+            ],
+            [
+                1,
+                1,
+                8
+            ],
+            [
+                4,
+                1,
+                7
+            ],
+            [
+                9,
+                0,
+                4
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(25%)->regret_3]",
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[time_worst_removal(10%)->regret_4]",
+            "[trip_removal(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 13,
+        "score": 580122.3734027719,
+        "length": 4,
+        "sequence_indices": [
+            [
+                4,
+                4,
+                7
+            ],
+            [
+                1,
+                1,
+                8
+            ],
+            [
+                4,
+                1,
+                7
+            ],
+            [
+                9,
+                0,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(25%)->regret_4]",
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[time_worst_removal(10%)->regret_4]",
+            "[trip_removal(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 14,
+        "score": 204130.80778809323,
+        "length": 4,
+        "sequence_indices": [
+            [
+                0,
+                1,
+                2
+            ],
+            [
+                1,
+                1,
+                8
+            ],
+            [
+                4,
+                0,
+                1
+            ],
+            [
+                9,
+                0,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[random_removal(10%)->regret_2]",
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[time_worst_removal(5%)->regret_2]",
+            "[trip_removal(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 15,
+        "score": 203474.68014731831,
+        "length": 4,
+        "sequence_indices": [
+            [
+                0,
+                1,
+                7
+            ],
+            [
+                1,
+                1,
+                8
+            ],
+            [
+                4,
+                0,
+                6
+            ],
+            [
+                9,
+                0,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[random_removal(10%)->regret_4]",
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[time_worst_removal(5%)->regret_3]",
+            "[trip_removal(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 16,
+        "score": 177650.8031174484,
+        "length": 4,
+        "sequence_indices": [
+            [
+                7,
+                1,
+                7
+            ],
+            [
+                1,
+                1,
+                7
+            ],
+            [
+                4,
+                5,
+                2
+            ],
+            [
+                1,
+                0,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_temporal(10%)->regret_4]",
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[time_worst_removal(30%)->regret_2]",
+            "[worst_removal_alpha_0(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 17,
+        "score": 550518.1217867436,
+        "length": 3,
+        "sequence_indices": [
+            [
+                4,
+                3,
+                2
+            ],
+            [
+                8,
+                2,
+                3
+            ],
+            [
+                4,
+                0,
+                0
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(20%)->regret_2]",
+            "[shaw_structural(15%)->regret_2]",
+            "[time_worst_removal(5%)->best_insertion]"
+        ]
+    },
+    {
+        "rank": 18,
+        "score": 485206.32049814676,
+        "length": 3,
+        "sequence_indices": [
+            [
+                4,
+                4,
+                5
+            ],
+            [
+                7,
+                1,
+                9
+            ],
+            [
+                9,
+                0,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(25%)->regret_3]",
+            "[shaw_temporal(10%)->regret_4]",
+            "[trip_removal(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 19,
+        "score": 387037.32856190525,
+        "length": 3,
+        "sequence_indices": [
+            [
+                1,
+                0,
+                8
+            ],
+            [
+                4,
+                1,
+                6
+            ],
+            [
+                2,
+                0,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[worst_removal_alpha_0(5%)->regret_4]",
+            "[time_worst_removal(10%)->regret_3]",
+            "[worst_removal_bigM(5%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 20,
+        "score": 378085.56396930123,
+        "length": 3,
+        "sequence_indices": [
+            [
+                3,
+                0,
+                0
+            ],
+            [
+                5,
+                1,
+                8
+            ],
+            [
+                9,
+                0,
+                7
+            ]
+        ],
+        "sequence_pretty": [
+            "[worst_removal_adaptive(5%)->best_insertion]",
+            "[shaw_spatial(10%)->regret_4]",
+            "[trip_removal(5%)->regret_4]"
+        ]
+    },
+    {
+        "rank": 21,
+        "score": 346141.7339060507,
+        "length": 3,
+        "sequence_indices": [
+            [
+                1,
+                1,
+                8
+            ],
+            [
+                4,
+                0,
+                6
+            ],
+            [
+                9,
+                0,
+                4
+            ]
+        ],
+        "sequence_pretty": [
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[time_worst_removal(5%)->regret_3]",
+            "[trip_removal(5%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 22,
+        "score": 482533.5137866927,
+        "length": 2,
+        "sequence_indices": [
+            [
+                4,
+                1,
+                7
+            ],
+            [
+                1,
+                1,
+                8
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(10%)->regret_4]",
+            "[worst_removal_alpha_0(10%)->regret_4]"
+        ]
+    },
+    {
+        "rank": 23,
+        "score": 368531.30845286493,
+        "length": 2,
+        "sequence_indices": [
+            [
+                4,
+                4,
+                4
+            ],
+            [
+                3,
+                0,
+                7
+            ]
+        ],
+        "sequence_pretty": [
+            "[time_worst_removal(25%)->regret_3]",
+            "[worst_removal_adaptive(5%)->regret_4]"
+        ]
+    },
+    {
+        "rank": 24,
+        "score": 293435.8486176672,
+        "length": 2,
+        "sequence_indices": [
+            [
+                8,
+                4,
+                6
+            ],
+            [
+                9,
+                0,
+                3
+            ]
+        ],
+        "sequence_pretty": [
+            "[shaw_structural(25%)->regret_3]",
+            "[trip_removal(5%)->regret_2]"
+        ]
+    },
+    {
+        "rank": 25,
+        "score": 90203.06179138045,
+        "length": 2,
+        "sequence_indices": [
+            [
+                1,
+                1,
+                8
+            ],
+            [
+                0,
+                3,
+                5
+            ]
+        ],
+        "sequence_pretty": [
+            "[worst_removal_alpha_0(10%)->regret_4]",
+            "[random_removal(20%)->regret_3]"
+        ]
+    },
+    {
+        "rank": 26,
+        "score": 228418.03413550789,
+        "length": 3,
+        "sequence_indices": [
+            [
+                0,
+                5,
+                9
+            ],
+            [
+                6,
+                1,
+                8
+            ],
+            [
+                9,
+                0,
+                7
+            ]
+        ],
+        "sequence_pretty": [
+            "[random_removal(30%)->regret_4]",
+            "[shaw_hybrid(10%)->regret_4]",
+            "[trip_removal(5%)->regret_4]"
+        ]
+    }
+]

@@ -6,6 +6,7 @@ import copy
 import random
 from pathlib import Path
 from collections import Counter, defaultdict
+import numpy as np
 #! python run_drl_alns_cvrp_gpseq.py
 # ==============================================================================
 # 1. CẤU HÌNH ĐƯỜNG DẪN
@@ -41,7 +42,7 @@ except ImportError as e:
     PRINT_FUNC_LOADED = False
 
 # --- CÁC HẰNG SỐ ---
-DEFAULT_RESULTS_ROOT = "single_runs/"
+DEFAULT_RESULTS_ROOT = "CEL_decision/"
 PARAMETERS_FILE = r'K:\Data Science\SOS lab\Project Code\src\routing\cvrp\configs\drl_alns_cvrp_debug.json'
 
 # ==============================================================================
@@ -54,7 +55,9 @@ def find_truck_by_id(truck_id, truck_list):
     return None
 
 def print_full_solution_details(solution_env, title):
-    """Hàm in kết quả Compact & Robust"""
+    """
+    HÀM IN COMPACT (GỌN GÀNG) - ĐÃ SỬA ĐỂ KHỚP VỚI TEST_ALNS
+    """
     print(f"\n\n{'='*60}")
     print(f"=== {title} ===")
     print(f"{'='*60}")
@@ -70,25 +73,29 @@ def print_full_solution_details(solution_env, title):
         print("  (Không có tuyến đường nào)")
         return
 
-    # Nhóm theo Truck ID
+    # 1. NHÓM CÁC TUYẾN THEO TRUCK_ID
     truck_routes_map = defaultdict(list)
     for route_info in solution_env.schedule:
+        # Unpack 7-tuple (Đảm bảo schedule của bạn đã là 7-tuple toàn bộ)
         try:
             if len(route_info) >= 7:
                 depot_idx, truck_id, customer_list, shift, start, finish, load = route_info[:7]
             else:
+                # Fallback nếu dữ liệu thiếu (để tránh crash)
                 depot_idx, truck_id, customer_list, shift, start = route_info[:5]
-                finish = 0
+                finish = start + 60 # Giả định
                 load = 0
             truck_routes_map[truck_id].append((depot_idx, truck_id, customer_list, shift, start, finish, load))
         except ValueError:
+            print(f"❌ Lỗi dữ liệu Schedule: Không đúng định dạng -> {route_info}")
             continue
 
+    # 2. SẮP XẾP VÀ IN
     sorted_truck_ids = sorted(truck_routes_map.keys())
 
     for truck_id in sorted_truck_ids:
         routes = truck_routes_map[truck_id]
-        routes.sort(key=lambda x: x[4]) 
+        routes.sort(key=lambda x: x[4]) # Sort theo start_time
         
         truck_info = find_truck_by_id(truck_id, available_trucks)
         truck_cap = truck_info.get('capacity', 0) if truck_info else 0
@@ -99,47 +106,59 @@ def print_full_solution_details(solution_env, title):
         for trip_idx, route_data in enumerate(routes, 1):
             depot_idx, _, customer_list, shift, start, finish, load = route_data
             
+            # --- TÍNH TOÁN CHỈ SỐ (STATS) ---
             try:
                 if shift == 'INTER-FACTORY':
+                    # Logic Inter-Factory
                     velocity = 1.0 if truck_type in ["Single", "Truck and Dog"] else 0.5
-                    task_name = str(customer_list[0])
-                    if finish == 0: finish = start + 60 
+                    task_name = str(customer_list[0]) # Ép kiểu str để tránh lỗi list
+                    
+                    if finish == 0 or finish <= start: 
+                         finish = start + 120 # Fallback cho Inter-factory nếu chưa có time chuẩn
                     
                     total_dist = (finish - start) * velocity
                     total_wait = 0.0
                     time_pen = max(0, finish - 1900)
                     cap_pen = 0.0
-                    
                     route_str = f"{task_name.replace('_', ' ')}"
                     icon = "🏭"
                     trip_name = "Chuyến đặc biệt"
                 else:
+                    # Logic Farm Visit
                     if PRINT_FUNC_LOADED:
                         calc_results = _calculate_route_schedule_and_feasibility(
                             depot_idx, customer_list, shift, start, finish, load, problem_instance, truck_info
                         )
+                        # Unpack kết quả
                         _, total_dist, total_wait, time_pen, cap_pen = calc_results[:5]
                     else:
-                        total_dist, total_wait, time_pen, cap_pen = 0, 0, 0, 0
-
+                         total_dist, total_wait, time_pen, cap_pen = 0, 0, 0, 0
+                    
                     route_str = f"Depot {depot_idx} → {' → '.join(map(str, customer_list))} → Depot {depot_idx}"
                     icon = "🧭"
                     trip_name = f"Chuyến {trip_idx}"
 
             except Exception as e:
+                # ‼️ IN RA LỖI THỰC SỰ ĐỂ DEBUG ‼️
+                print(f"   ❌ Lỗi Python: {e}")
                 total_dist, total_wait, time_pen, cap_pen = 0, 0, 0, 0
-                route_str = f"Route: {customer_list}"
+                route_str = "Lỗi tính toán (Xem chi tiết ở trên)"
                 icon = "⚠️"
                 trip_name = f"Chuyến {trip_idx}"
 
+            # --- IN KẾT QUẢ ---
             sh, sm = divmod(int(start), 60)
             eh, em = divmod(int(finish), 60)
             
-            print(f"   {icon} {trip_name} ({shift}) - {sh:02d}:{sm:02d} -> {eh:02d}:{em:02d}")
-            pen_flag = "⚠️ " if (time_pen > 0 or cap_pen > 0) else ""
-            print(f"      📊 Stats: Dist: {total_dist:.1f} km | Wait: {total_wait:.1f} min | "
-                  f"Load: {load:.0f}/{truck_cap:.0f} | {pen_flag}TimePen: {time_pen:.1f} | CapPen: {cap_pen:.1f}")
+            # [CHỈNH SỬA QUAN TRỌNG]: Thêm route_str vào dòng in
+            print(f"   {icon} {trip_name} ({shift}) - Depot {depot_idx} (Xuất phát {sh:02d}:{sm:02d}): "
+                  f"{route_str}, Kết thúc: {eh:02d}:{em:02d}")
 
+            pen_flag = "⚠️ " if (time_pen > 0 or cap_pen > 0) else ""
+            
+            print(f"      📊 Stats: Dist: {total_dist:.1f} km | Wait: {total_wait:.1f} min | "
+                  f"Demand: {load:.0f}/{truck_cap:.0f} | "
+                  f"{pen_flag}Time Pen: {time_pen:.1f} | Cap Pen: {cap_pen:.1f}")
 # ==============================================================================
 # 3. HÀM CHẠY ĐÁNH GIÁ (RUN EVALUATION)
 # ==============================================================================
@@ -161,12 +180,52 @@ def run_evaluation(folder, exp_name, problem_instance, **kwargs):
     # 4. KHỞI TẠO BIẾN BAN ĐẦU
     print(f"Resetting Env with Seed: {seed}")
     obs, _ = env.reset(seed=seed)
-    
+
+    # ============================================================
+    # [QUAN TRỌNG] CLEANUP INTER-FACTORY (ĐÚNG CÁCH)
+    # ============================================================
+    try:
+        from routing.cvrp.alns_cvrp.utils import cleanup_inter_factory_routes
+        
+        # Cleanup SOLUTION, không phải ENV
+        if hasattr(env, 'current_solution'):
+            env.current_solution = cleanup_inter_factory_routes(env.current_solution)
+            print("✅ Đã cleanup Inter-Factory routes trong current_solution.")
+        
+        # Nếu có initial_solution riêng biệt, cleanup luôn
+        if hasattr(env, 'initial_solution'):
+            env.initial_solution = cleanup_inter_factory_routes(env.initial_solution)
+            print("✅ Đã cleanup Inter-Factory routes trong initial_solution.")
+            
+    except ImportError as e:
+        print(f"⚠️ Không thể import cleanup_inter_factory_routes: {e}")
+    except Exception as e:
+        print(f"⚠️ Lỗi khi cleanup: {e}")
+    # ============================================================
+
+    # Lấy bản sao để in
     if hasattr(env, 'initial_solution'):
         int_solution = copy.deepcopy(env.initial_solution)
     else:
         int_solution = copy.deepcopy(env.current_solution)
 
+    # 1. Kiểm tra xem input (obs) có bị NaN không?
+    if np.isnan(obs).any() or np.isinf(obs).any():
+        print("❌ LỖI NGHIÊM TRỌNG: Observation chứa NaN hoặc Inf!")
+        print("Dữ liệu input bị hỏng ngay từ bước Feature Engineering.")
+        # In ra các giá trị để soi
+        print(obs)
+        # Tạm dừng để bạn đọc lỗi
+        import sys; sys.exit("Dừng chương trình do Bad Input.")
+    else:
+        print("✅ Input (obs) sạch, không có NaN.")
+        
+    # 2. Kiểm tra Scale của input (nếu quá lớn cũng gây NaN trong mạng)
+    print(f"🔍 Obs Range: Min={np.min(obs)}, Max={np.max(obs)}")
+    # ---------------------------------------------------------------------
+
+    action, _states = model.predict(obs, deterministic=False) # <--- Dòng cũ của bạn
+    
     # --- SỬA LẠI ĐOẠN NÀY ---
     # Lấy bộ giá trị mục tiêu (Total Cost, Time Penalty, Wait Time, Capacity Penalty)
     initial_objectives = int_solution.objective()

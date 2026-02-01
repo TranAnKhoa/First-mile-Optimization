@@ -7,7 +7,91 @@ import sys
 from .utils import _clean_base_id
 # ======================= HÀM TIỆN ÍCH =======================
 
+unvisited_cus = []
+def _calculate_route_schedule_and_feasibility_ini(depot_idx, customer_list, shift, start_time_at_depot, problem_instance, truck_info):
+    """Kiểm tra tính khả thi của route với time window, đã bao gồm velocity."""
+    
+    # Nếu danh sách khách rỗng -> kết thúc ngay
+    if not customer_list:
+        ### 1. <SỬA> Trả về 3 giá trị (thêm wait_time = 0) ###
+        return start_time_at_depot, True, 0
+    
+    # Lấy các cấu trúc dữ liệu cần thiết từ problem_instance
+    dist_matrix = problem_instance['distance_matrix_farms']
+    depot_farm_dist = problem_instance['distance_depots_farms']
+    farms = problem_instance['farms']
+    farm_id_to_idx = problem_instance['farm_id_to_idx_map']
+    depot_end_time = 1900 
+    current_time = start_time_at_depot 
+    truck_name = truck_info['type'] 
+    velocity = 1.0 if truck_name in ["Single", "Truck and Dog"] else 0.5
+    virtual_map = problem_instance.get('virtual_split_farms', {})
 
+    def _resolve_farm(fid):
+        base_id_str = _clean_base_id(fid)
+        try:
+            base_idx = farm_id_to_idx[base_id_str]
+        except KeyError:
+            base_idx = farm_id_to_idx[int(base_id_str)]
+        base_info = farms[base_idx]
+        if isinstance(fid, str) and fid in virtual_map:
+            portion = virtual_map[fid].get('portion', 0)
+            return base_idx, portion, base_info['service_time_params'], base_info['time_windows']
+        else:
+            return base_idx, base_info['demand'], base_info['service_time_params'], base_info['time_windows']
+
+    # ============ xử lý khách đầu tiên (từ depot -> customer đầu) ============
+    first_cust_id = customer_list[0]
+    first_idx, first_demand, first_params, first_tw = _resolve_farm(first_cust_id)
+    travel_time = depot_farm_dist[depot_idx, first_idx] / velocity
+    arrival_time = current_time + travel_time 
+    
+    start_tw, end_tw = first_tw[shift]
+    
+    ### 2. <SỬA> Tính toán thời gian chờ của khách đầu tiên ###
+    first_wait = max(0, start_tw - arrival_time)
+    
+    service_start = max(arrival_time, start_tw)
+    
+    # (Đây là logic bạn đã sửa đúng)
+    if service_start > end_tw + 1e-6:
+        return -1, False, 0 # Trả về 3 giá trị
+
+    fix_time, var_param = first_params
+    service_duration = fix_time + (first_demand / var_param if var_param > 0 else 0)
+    current_time = service_start + service_duration 
+
+    # ============ xử lý các khách tiếp theo (customer_list[1:] ) ============
+    for i in range(len(customer_list) - 1):
+        from_idx, _, _, _ = _resolve_farm(customer_list[i])
+        to_idx, to_demand, to_params, to_tw = _resolve_farm(customer_list[i + 1])
+        travel_time = dist_matrix[from_idx, to_idx] / velocity
+        arrival_time = current_time + travel_time
+
+        start_tw, end_tw = to_tw[shift]
+        service_start = max(arrival_time, start_tw)
+        
+        # (Đây là logic bạn đã sửa đúng)
+        if service_start > end_tw + 1e-6:
+            return -1, False, 0 # Trả về 3 giá trị
+        
+        fix_time, var_param = to_params
+        service_duration = fix_time + (to_demand / var_param if var_param > 0 else 0)
+        current_time = service_start + service_duration
+
+    # ============ sau khi phục vụ khách cuối, quay lại depot ============
+    last_idx, _, _, _ = _resolve_farm(customer_list[-1])
+    travel_time_back = depot_farm_dist[depot_idx, last_idx] / velocity
+    finish_time_at_depot = current_time + travel_time_back
+    
+    if finish_time_at_depot > depot_end_time:
+        return -1, False, 0 # Trả về 3 giá trị
+    
+    ### 3. <SỬA> Trả về 3 giá trị (thêm first_wait) ###
+    return finish_time_at_depot, True, first_wait
+
+
+unvisited_cus = []
 def _calculate_route_schedule_and_feasibility_ini(depot_idx, customer_list, shift, start_time_at_depot, problem_instance, truck_info):
     """Kiểm tra tính khả thi của route với time window, đã bao gồm velocity."""
     
@@ -267,6 +351,7 @@ def compute_initial_solution(problem_instance, random_state):
         if best_option[1] is None:
             print(f"!!! LỖI THỜI GIAN: Farm {i} (Demand {eff_demand}) không thể lên lịch (đã thử cả ngoài vùng).")
             count += 1
+            unvisited_cus.append(i)
             continue
 
         # LƯU KẾT QUẢ
@@ -375,7 +460,7 @@ def compute_initial_solution(problem_instance, random_state):
                     print(f"🧭 Chuyến {trip_no} ({shift}) - Depot {depot} (XP {h:02d}:{m:02d}): {route_str} (Load: {route_load}) -> Kết thúc {k:02d}:{n:02d}")
 
     print("\n--- KẾT THÚC COMPUTE_INITIAL_SOLUTION ---")
-    print(f"Số nông trại không thể lên lịch: {count}")
+    print(f"Số nông trại không thể lên lịch: {count} is {unvisited_cus} ")
     
     # In thống kê xe (như cũ)
     all_truck_ids = {t['id'] for t in available_trucks}

@@ -7,9 +7,8 @@ import math
 from collections import defaultdict
 
 # --- 1. CẤU HÌNH ---
-EXCEL_FILE_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_400.xlsx'
-# Tên file output thống nhất
-PKL_OUTPUT_PATH = r'K:\Data Science\SOS lab\Project Code\output_data\CEL_400.pkl'
+EXCEL_FILE_PATH = r'K:\Data Science\SOS lab\Project Code\benchmark_results_folder\CEL_instance_tw_expand_1_1_hour.xlsx'
+PKL_OUTPUT_PATH = r'K:\Data Science\SOS lab\Project Code\benchmark_results_folder\CEL_instance_tw_expand_1_1_hour.pkl'
 # Tên các sheet
 SHEET_FACILITY_MASTER = 'FacilityMaster'
 SHEET_FARM_MASTER = 'FarmMaster'
@@ -29,32 +28,29 @@ import math
 
 def compute_dist(coord1, coord2):
     """
-    Tính khoảng cách (km) giữa hai tọa độ địa lý (vĩ độ, kinh độ)
-    sử dụng công thức Haversine.
-
-    Tham số:
-      coord1: (lat1, lon1)
-      coord2: (lat2, lon2)
-
-    Trả về:
-      distance_km: khoảng cách theo km
+    Input: [Longitude, Latitude]
     """
-    # Bán kính Trái Đất (km)
-    R = 6371.0  
-
-    # Chuyển độ sang radian
-    lat1, lon1 = map(math.radians, coord1)
-    lat2, lon2 = map(math.radians, coord2)
-    # Hiệu giữa vĩ độ và kinh độ
+    R = 6371.0
+    
+    # SỬA Ở ĐÂY: Phần tử đầu (index 0) là Longitude
+    lon1, lat1 = map(math.radians, coord1) 
+    lon2, lat2 = map(math.radians, coord2)
+    
     dlat = lat2 - lat1
     dlon = lon2 - lon1
-    # Công thức Haversine
+    
     a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    distance_km = R * c
-    return distance_km
-
-
+    return R * c
+def normalize_id(raw_val):
+    """
+    Chuẩn hóa ID về dạng chuỗi sạch để so sánh khớp 100%.
+    Ví dụ: 1 -> "1", 1.0 -> "1", " 1 " -> "1"
+    """
+    s = str(raw_val).strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s
 # --- 2. XỬ LÝ ---
 print(f"🔄 Bắt đầu đọc dữ liệu từ file đa sheet: '{EXCEL_FILE_PATH}'...")
 
@@ -107,23 +103,90 @@ try:
         }
         farms_list.append(farm_obj)
     
-    # --- 3. XỬ LÝ ĐỘI XE (FLEET) ---
-    print("🔧 Đang xử lý dữ liệu Đội xe...")
-    df_fleet_merged = pd.merge(df_fleet_master, df_truck_lease_cost, on='FleetRef', how='left', suffixes=('_fleet', '_cost'))
+    # --- 3. XỬ LÝ ĐỘI XE (FLEET) - PHIÊN BẢN CHUẨN HÓA ID ---
+    print("🔧 Đang xử lý dữ liệu Đội xe (Mapping Lease Cost thông minh)...")
+
+    # --- BƯỚC 3.1: TẠO MAPPING TỪ SHEET 'TruckLeaseCost' ---
+    # Cấu trúc: Col 1 (FleetRef/ID) [index 0], Col 3 (LeaseCost) [index 2]
+    lease_cost_map = {} 
+    
+    if not df_truck_lease_cost.empty:
+        try:
+            for i in range(len(df_truck_lease_cost)):
+                raw_id = df_truck_lease_cost.iloc[i, 0] 
+                raw_cost = df_truck_lease_cost.iloc[i, 2]
+
+                # Chuẩn hóa ID
+                clean_id = normalize_id(raw_id)
+                
+                # Lấy giá tiền
+                try:
+                    cost_val = float(raw_cost)
+                except (ValueError, TypeError):
+                    cost_val = 0.0
+                
+                lease_cost_map[clean_id] = cost_val
+            
+            print(f"   -> Đã đọc bảng giá Lease: {len(lease_cost_map)} entries.")
+        except Exception as e:
+            print(f"   -> ❌ Lỗi đọc sheet TruckLeaseCost: {e}")
+
+    # --- BƯỚC 3.2: MAP VÀO DANH SÁCH XE ---
+    if 'Capacity' in df_fleet_master.columns:
+        df_fleet_master['Capacity'] = df_fleet_master['Capacity'].fillna(0)
+
     available_trucks_list = []
-    for _, row in df_fleet_merged.iterrows():
+    count_virtual_mapped = 0
+    count_missed = 0
+
+    for _, row in df_fleet_master.iterrows():
+        # Chuẩn hóa ID xe hiện tại
+        raw_fleet_ref = row['FleetRef']
+        t_id_clean = normalize_id(raw_fleet_ref)
+        
+        # Cố gắng giữ ID dạng số int nếu có thể (để code chính dễ xử lý)
+        try:
+            final_id = int(t_id_clean)
+        except:
+            final_id = t_id_clean
+
+        region_clean = str(row.get('Region', 'Unknown')).strip()
+        truck_type = str(row.get('Type', '')).strip()
+
+        # --- LOGIC LẤY GIÁ ---
+        # 1. Tìm chính xác
+        real_cost = lease_cost_map.get(t_id_clean, 0.0)
+
+        # 2. Nếu không thấy & là xe ảo (ID dài > 3 ký tự), thử tìm xe gốc
+        # Ví dụ: 1222 -> Tìm xe 1
+        if real_cost == 0 and len(t_id_clean) > 3:
+            parent_id = t_id_clean[:-3] # Cắt 3 số cuối
+            real_cost = lease_cost_map.get(parent_id, 0.0)
+            if real_cost > 0:
+                count_virtual_mapped += 1
+        
+        # Thống kê lỗi (để debug)
+        if real_cost == 0 and count_missed < 3:
+            print(f"      ⚠️ Cảnh báo: Xe {t_id_clean} (Gốc: {raw_fleet_ref}) vẫn có giá = 0!")
+            count_missed += 1
+
         truck_obj = {
-            "id": row['FleetRef'],
-            "region": str(row.get('Region_fleet', row.get('Region'))).strip(), # <-- SỬA LỖI: Dọn dẹp khoảng trắng
-            "type": row['Type'],
-            "capacity": row['Capacity'],
-            "lease_cost_monthly": row.get('LeaseCostPerMonth', 0)
+            "id": final_id,
+            "region": region_clean,
+            "type": truck_type,
+            "capacity": float(row['Capacity']),
+            "lease_cost_monthly": real_cost # <--- Giá thật đã map
         }
         available_trucks_list.append(truck_obj)
-    truck_purchasing_cost = dict(zip(df_truck_purchasing_cost['TruckType'], df_truck_purchasing_cost['PurchasingCost']))
-    registration_cost = dict(zip(df_registration_cost['TruckType'], df_registration_cost['CostRate']))
-    fleet_data = { "available_trucks": available_trucks_list, "purchasing_options": truck_purchasing_cost, "registration_cost_yearly": registration_cost }
 
+    # --- BƯỚC 3.3: ĐÓNG GÓI ĐÚNG CẤU TRÚC ---
+    fleet_data = { 
+        "available_trucks": available_trucks_list, 
+        "purchasing_options": {}, 
+        "registration_cost_yearly": {} 
+    }
+    print(f"✅ Đã xử lý xong Đội xe. Tổng: {len(available_trucks_list)} xe.")
+    print(f"   (Đã map thành công {count_virtual_mapped} xe ảo về giá gốc)")
     # --- 4. TÍNH TOÁN CÁC MA TRẬN KHOẢNG CÁCH ---
     print("🔧 Đang tính toán các ma trận khoảng cách...")
     farm_coords = [f['coords'] for f in farms_list]

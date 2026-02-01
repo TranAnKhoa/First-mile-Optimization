@@ -1,8 +1,8 @@
 {
   "rseed": 99013,
-  "instance_file": "K:\\Data Science\\SOS lab\\Project Code\\output_data\\CEL_instance.pkl",
+  "instance_file": "K:\\Data Science\\SOS lab\\Project Code\\output_data\\train_inst_22_size_278.pkl",
   "iterations": 1000,
-  "instance_nr": 0,
+  "instance_nr": 0, 
   "model_directory": "K:\\Data Science\\SOS lab\\Project Code\\trained_model\\ppo_macro_22_150000_steps.zip"
 
 }
